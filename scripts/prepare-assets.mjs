@@ -58,6 +58,23 @@ const WEBP = [
   { src: 'entities/wall-bouncers/BouncyWall-triangle-bottom.png', q: 80 },
 ];
 
+/**
+ * Colorized variants. bath-pool.png ships greyscale (a tint target); the game shows it
+ * as light-blue water tiles. Linear per-channel map derived by fitting the greyscale
+ * tile range onto the colour range of the reference (Downloads/colored-bath-pool.png,
+ * tiles #10A9E0..#29C3EB — same look the vault example draws procedurally with
+ * #4EC7F0 fill + #44B8E8 checker).
+ */
+const COLORIZE = [
+  {
+    src: 'theme/bath-pool.png',
+    out: 'theme/bath-pool-blue.webp',
+    a: [0.2874, 0.2989, 0.1264],
+    b: [-11.3, 140.6, 212.0],
+    q: 78,
+  },
+];
+
 /** Fonts -> woff2 subset. Title Case per brand rules, so keep both cases + digits + punctuation. */
 const FONT_CHARS =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 !?.,:/×+-\'"%';
@@ -95,6 +112,18 @@ for (const { src: rel, q } of WEBP) {
   totalIn += inSize;
   totalOut += outSize;
   console.log(`webp  ${rel.padEnd(58)} ${kb(inSize)} -> ${kb(outSize)} (q${q})`);
+}
+
+for (const { src: rel, out: outRel, a, b, q } of COLORIZE) {
+  const src = path.join(PACK, rel);
+  const out = path.join(OUT, outRel);
+  ensureDir(out);
+  const inSize = fs.statSync(src).size;
+  await sharp(src).toColourspace('srgb').linear(a, b).webp({ quality: q }).toFile(out);
+  const outSize = fs.statSync(out).size;
+  totalIn += inSize;
+  totalOut += outSize;
+  console.log(`tint  ${rel.padEnd(58)} ${kb(inSize)} -> ${kb(outSize)} (q${q})`);
 }
 
 for (const { src: rel, out: outRel } of FONTS) {
