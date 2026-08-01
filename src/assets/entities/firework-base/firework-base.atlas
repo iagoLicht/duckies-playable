@@ -1,0 +1,21 @@
+firework-base.png
+size:572,204
+filter:Linear,Linear
+scale:0.5
+1
+bounds:425,54,33,32
+rotate:90
+Crate
+bounds:2,7,206,195
+CrateS
+bounds:210,66,136,143
+rotate:90
+Foam
+bounds:355,89,123,113
+Front CrateBIG
+bounds:480,4,198,90
+rotate:90
+Front crate SS
+bounds:210,2,128,62
+ripple
+bounds:355,19,68,68

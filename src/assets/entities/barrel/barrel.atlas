@@ -1,0 +1,13 @@
+barrel.png
+size:172,480
+base
+bounds:2,126,156,154
+bg
+bounds:2,2,122,122
+pie
+bounds:126,78,46,33
+offsets:60,81,116,116
+rotate:90
+top
+bounds:2,282,168,196
+offsets:1,1,170,198

@@ -1,0 +1,294 @@
+{
+"skeleton": {
+	"hash": "0KQqCpEXKR0",
+	"spine": "4.2.40",
+	"x": -85,
+	"y": -82,
+	"width": 170,
+	"height": 202.23,
+	"images": "",
+	"audio": "./audio"
+},
+"bones": [
+	{ "name": "root" },
+	{ "name": "barrel", "parent": "root" },
+	{ "name": "pie", "parent": "barrel", "y": 41 },
+	{ "name": "part1", "parent": "pie" },
+	{ "name": "part2", "parent": "pie", "rotation": -60 },
+	{ "name": "part3", "parent": "pie", "rotation": -120 },
+	{ "name": "part4", "parent": "pie", "rotation": 180 },
+	{ "name": "part5", "parent": "pie", "rotation": 120 },
+	{ "name": "part6", "parent": "pie", "rotation": 60 }
+],
+"slots": [
+	{ "name": "base", "bone": "barrel", "attachment": "base" },
+	{ "name": "bg", "bone": "barrel", "attachment": "bg" },
+	{ "name": "pie6", "bone": "part6", "color": "89ba2dff", "attachment": "pie" },
+	{ "name": "pie5", "bone": "part5", "color": "89ba2dff", "attachment": "pie" },
+	{ "name": "pie4", "bone": "part4", "color": "89ba2dff", "attachment": "pie" },
+	{ "name": "pie3", "bone": "part3", "color": "89ba2dff", "attachment": "pie" },
+	{ "name": "pie2", "bone": "part2", "color": "89ba2dff", "attachment": "pie" },
+	{ "name": "pie", "bone": "part1", "color": "89ba2dff", "attachment": "pie" },
+	{ "name": "top", "bone": "barrel", "attachment": "top" }
+],
+"skins": [
+	{
+		"name": "default",
+		"attachments": {
+			"base": {
+				"base": { "width": 156, "height": 154 }
+			},
+			"bg": {
+				"bg": { "y": 41, "width": 122, "height": 122 }
+			},
+			"pie": {
+				"pie": { "width": 116, "height": 116 }
+			},
+			"pie2": {
+				"pie": { "width": 116, "height": 116 }
+			},
+			"pie3": {
+				"pie": { "width": 116, "height": 116 }
+			},
+			"pie4": {
+				"pie": { "width": 116, "height": 116 }
+			},
+			"pie5": {
+				"pie": { "width": 116, "height": 116 }
+			},
+			"pie6": {
+				"pie": { "width": 116, "height": 116 }
+			},
+			"top": {
+				"top": { "y": 17, "width": 170, "height": 198 }
+			}
+		}
+	}
+],
+"animations": {
+	"hit0": {},
+	"hit1": {
+		"bones": {
+			"part6": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			}
+		}
+	},
+	"hit2": {
+		"slots": {
+			"pie6": {
+				"attachment": [
+					{}
+				]
+			}
+		},
+		"bones": {
+			"part6": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part5": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			}
+		}
+	},
+	"hit3": {
+		"slots": {
+			"pie5": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie6": {
+				"attachment": [
+					{}
+				]
+			}
+		},
+		"bones": {
+			"part6": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part5": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part4": {
+				"rotate": [
+					{ "value": -300 }
+				]
+			}
+		}
+	},
+	"hit4": {
+		"slots": {
+			"pie4": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie5": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie6": {
+				"attachment": [
+					{}
+				]
+			}
+		},
+		"bones": {
+			"part6": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part5": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part4": {
+				"rotate": [
+					{ "value": -300 }
+				]
+			},
+			"part3": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			}
+		}
+	},
+	"hit5": {
+		"slots": {
+			"pie": {
+				"rgba": [
+					{ "color": "ff0000ff" }
+				]
+			},
+			"pie3": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie4": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie5": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie6": {
+				"attachment": [
+					{}
+				]
+			}
+		},
+		"bones": {
+			"part6": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part5": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part4": {
+				"rotate": [
+					{ "value": -300 }
+				]
+			},
+			"part3": {
+				"rotate": [
+					{ "value": 120 }
+				]
+			},
+			"part2": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			}
+		}
+	},
+	"hit6": {
+		"slots": {
+			"pie": {
+				"rgba": [
+					{ "color": "ff0000ff" }
+				],
+				"attachment": [
+					{}
+				]
+			},
+			"pie2": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie3": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie4": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie5": {
+				"attachment": [
+					{}
+				]
+			},
+			"pie6": {
+				"attachment": [
+					{}
+				]
+			}
+		},
+		"bones": {
+			"part6": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part5": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			},
+			"part4": {
+				"rotate": [
+					{ "value": -300 }
+				]
+			},
+			"part3": {
+				"rotate": [
+					{ "value": 120 }
+				]
+			},
+			"part2": {
+				"rotate": [
+					{ "value": 60 }
+				]
+			}
+		}
+	},
+	"idle": {}
+}
+}
