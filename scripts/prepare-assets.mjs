@@ -14,6 +14,7 @@ const OUT = 'src/assets';
 const COPY = [
   'entities/ducky/ducky.skel', 'entities/ducky/ducky.atlas',
   'entities/barrel/barrel.json', 'entities/barrel/barrel.atlas',
+  'entities/crate-round/crate-round.skel', 'entities/crate-round/crate-round.atlas',
   'entities/firework-base/firework-base.skel', 'entities/firework-base/firework-base.atlas',
   'entities/firework-rocket/firework-rocket.skel', 'entities/firework-rocket/firework-rocket.atlas',
   'entities/tutorial-hand/tutorial-hand.json', 'entities/tutorial-hand/tutorial-hand.atlas',
@@ -29,6 +30,7 @@ const COPY = [
 const WEBP = [
   { src: 'entities/ducky/ducky.png', q: 82 },                       // atlas page — quality generous, it's the hero
   { src: 'entities/barrel/barrel.png', q: 80 },                     // atlas page
+  { src: 'entities/crate-round/crate-round.png', q: 80 },           // atlas page — THE barrel (game's ribbon-strip mechanic)
   { src: 'entities/firework-base/firework-base.png', q: 80 },       // atlas page
   { src: 'entities/firework-rocket/firework-rocket.png', q: 80 },   // atlas page
   { src: 'entities/tutorial-hand/tutorial-hand.png', q: 80 },       // atlas page
