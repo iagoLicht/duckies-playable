@@ -5,9 +5,9 @@ import { loadSkeleton, makeSpine } from './engine/spineLoader';
 import duckySkelUrl from './assets/entities/ducky/ducky.skel';
 import duckyAtlasText from './assets/entities/ducky/ducky.atlas?raw';
 import duckyPageUrl from './assets/entities/ducky/ducky.webp';
-import barrelJsonUrl from './assets/entities/barrel/barrel.json?url';
-import barrelAtlasText from './assets/entities/barrel/barrel.atlas?raw';
-import barrelPageUrl from './assets/entities/barrel/barrel.webp';
+import crateSkelUrl from './assets/entities/crate-round/crate-round.skel';
+import crateAtlasText from './assets/entities/crate-round/crate-round.atlas?raw';
+import cratePageUrl from './assets/entities/crate-round/crate-round.webp';
 import fwBaseSkelUrl from './assets/entities/firework-base/firework-base.skel';
 import fwBaseAtlasText from './assets/entities/firework-base/firework-base.atlas?raw';
 import fwBasePageUrl from './assets/entities/firework-base/firework-base.webp';
@@ -83,14 +83,31 @@ async function boot(): Promise<void> {
     add(duck, 130 + i * 155, 420, 0.9);
   });
 
-  // barrel (JSON rig) at three damage stages
-  const barrelData = await loadSkeleton({
-    jsonUrl: barrelJsonUrl, atlasText: barrelAtlasText, pageUrl: barrelPageUrl,
+  // THE barrel (crate-round): clasps strip off per hit — hp3..hp1 damage walk,
+  // then one looping `hit` wobble so the impact reaction is visible too
+  const crateData = await loadSkeleton({
+    skelUrl: crateSkelUrl, atlasText: crateAtlasText, pageUrl: cratePageUrl,
   });
-  (['idle', 'hit2', 'hit5'] as const).forEach((anim, i) => {
-    const b = makeSpine(barrelData);
-    b.state.setAnimation(0, anim, false);
-    add(b, 150 + i * 210, 700, 0.9);
+  (['hp3', 'hp2', 'hp1'] as const).forEach((stage, i) => {
+    const c = makeSpine(crateData);
+    c.skeleton.setSkinByName('wood');
+    c.skeleton.setSlotsToSetupPose();
+    c.state.setAnimation(0, stage, false);
+    add(c, 120 + i * 165, 640, 0.85);
+  });
+  const wobbler = makeSpine(crateData);
+  wobbler.skeleton.setSkinByName('wood');
+  wobbler.skeleton.setSlotsToSetupPose();
+  wobbler.state.setAnimation(0, 'hit', true);
+  add(wobbler, 615, 640, 0.85);
+
+  // colour-skinned barrels (full clasps) — note: no green skin exists on this rig
+  (['yellow', 'purple', 'red'] as const).forEach((skin, i) => {
+    const c = makeSpine(crateData);
+    c.skeleton.setSkinByName(skin);
+    c.skeleton.setSlotsToSetupPose();
+    c.state.setAnimation(0, 'hp5', false);
+    add(c, 175 + i * 185, 800, 0.85);
   });
 
   // firework crate + one rocket per colour skin
