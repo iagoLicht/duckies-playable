@@ -44,6 +44,8 @@ async function boot(): Promise<void> {
   document.getElementById('game')!.appendChild(app.canvas);
   fitCanvas(app);
   window.addEventListener('resize', () => fitCanvas(app));
+  // visualViewport is the listener that actually fires on mobile URL-bar collapse
+  window.visualViewport?.addEventListener('resize', () => fitCanvas(app));
 
   // background, cover-fit
   const bg = Sprite.from(await (async () => {
@@ -127,6 +129,13 @@ async function boot(): Promise<void> {
     const dt = t.deltaMS / 1000;
     for (const s of spines) s.update(dt);
   });
+
+  // deterministic readiness signal for the screenshot harness
+  (window as unknown as { __sceneReady?: boolean }).__sceneReady = true;
 }
 
-void boot();
+boot().catch((e: unknown) => {
+  // surface boot failures — a swallowed rejection here is a blank screen with no clue,
+  // and console.error is exactly what the screenshot harness's gate listens for
+  console.error('boot failed', e);
+});

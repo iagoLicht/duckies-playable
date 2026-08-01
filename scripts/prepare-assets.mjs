@@ -6,7 +6,8 @@ import path from 'node:path';
 import sharp from 'sharp';
 import subsetFont from 'subset-font';
 
-const PACK = 'C:/Users/licht/OneDrive/Desktop/Candivore/Marketing AI Student_Ready/duckies-playable-home-test 3/assets';
+const PACK = process.env.DUCKIES_PACK
+  ?? 'C:/Users/licht/OneDrive/Desktop/Candivore/Marketing AI Student_Ready/duckies-playable-home-test 3/assets';
 const OUT = 'src/assets';
 
 /** Copied byte-for-byte (skeletons, atlases, audio). */
@@ -24,7 +25,7 @@ const COPY = [
   'sfx/clips/ui-click.mp3', 'sfx/clips/merge-swirl.mp3',
 ];
 
-/** PNG -> WebP, same dimensions. q: quality; width set ONLY for non-atlas standalone art. */
+/** PNG -> WebP, same dimensions (never resized). q: quality. */
 const WEBP = [
   { src: 'entities/ducky/ducky.png', q: 82 },                       // atlas page — quality generous, it's the hero
   { src: 'entities/barrel/barrel.png', q: 80 },                     // atlas page
