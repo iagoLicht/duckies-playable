@@ -1,0 +1,23 @@
+{
+  "name": "duckies-playable",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/pack.mjs",
+    "assets": "node scripts/prepare-assets.mjs",
+    "shot": "node tests/shot.mjs"
+  },
+  "dependencies": {
+    "@esotericsoftware/spine-pixi-v8": "~4.2.119",
+    "pixi.js": "^8.16.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0",
+    "sharp": "^0.34.0",
+    "subset-font": "^2.4.0",
+    "typescript": "^5.5.0",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.0.0"
+  }
+}
