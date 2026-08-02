@@ -1,4 +1,4 @@
-import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
+import { Application, Texture, TilingSprite } from 'pixi.js';
 import type { Spine } from '@esotericsoftware/spine-pixi-v8';
 import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
@@ -17,7 +17,6 @@ import fwRocketPageUrl from './assets/entities/firework-rocket/firework-rocket.w
 import handJsonUrl from './assets/entities/tutorial-hand/tutorial-hand.json?url';
 import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
 import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
-import bgUrl from './assets/theme/in-game-bg.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
 
 export const DESIGN_W = 720;
@@ -34,7 +33,7 @@ async function boot(): Promise<void> {
   await app.init({
     width: DESIGN_W,
     height: DESIGN_H,
-    backgroundColor: 0xf8dfe4,
+    backgroundColor: 0x16b3e4,
     preference: 'webgl',
     antialias: false,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
@@ -48,42 +47,18 @@ async function boot(): Promise<void> {
   // visualViewport is the listener that actually fires on mobile URL-bar collapse
   window.visualViewport?.addEventListener('resize', () => fitCanvas(app));
 
-  // background, cover-fit
-  const bg = Sprite.from(await (async () => {
-    const img = new Image();
-    img.src = bgUrl;
-    await img.decode();
-    return img;
-  })());
-  const cover = Math.max(DESIGN_W / bg.texture.width, DESIGN_H / bg.texture.height);
-  bg.scale.set(cover);
-  bg.anchor.set(0.5);
-  bg.position.set(DESIGN_W / 2, DESIGN_H / 2);
-  app.stage.addChild(bg);
-
-  // bath/pool area — colourized water tiles in a rounded rect, rim strokes matching
-  // the reference playable (outer #2f9fd4, inner highlight #aff0ff)
+  // full-screen water floor — the colourized blue tile covers the whole stage,
+  // no separate pool area or pink surround
   const poolImg = new Image();
   poolImg.src = poolTileUrl;
   await poolImg.decode();
-  const pool = { x: 36, y: 310, w: 648, h: 625, r: 40 };
   const water = new TilingSprite({
     texture: Texture.from(poolImg),
-    width: pool.w,
-    height: pool.h,
+    width: DESIGN_W,
+    height: DESIGN_H,
   });
-  water.position.set(pool.x, pool.y);
   water.tileScale.set(1.3); // tile pitch ≈ the example's 1.35 world units at our ppu
-  const waterMask = new Graphics()
-    .roundRect(pool.x, pool.y, pool.w, pool.h, pool.r)
-    .fill(0xffffff);
-  water.mask = waterMask;
-  const rim = new Graphics()
-    .roundRect(pool.x, pool.y, pool.w, pool.h, pool.r)
-    .stroke({ width: 9, color: 0x2f9fd4 })
-    .roundRect(pool.x, pool.y, pool.w, pool.h, pool.r)
-    .stroke({ width: 4, color: 0xaff0ff });
-  app.stage.addChild(water, waterMask, rim);
+  app.stage.addChild(water);
 
   const spines: Spine[] = [];
   const add = (s: Spine, x: number, y: number, scale: number): Spine => {
