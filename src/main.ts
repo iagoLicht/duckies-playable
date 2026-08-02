@@ -189,12 +189,12 @@ async function boot(): Promise<void> {
   add(wobbler, 615, 1090, 0.85);
 
   // colour-skinned barrels (full clasps) — note: no green skin exists on this rig
-  (['yellow', 'purple', 'red'] as const).forEach((skin, i) => {
+  (['yellow', 'red'] as const).forEach((skin, i) => {
     const c = makeSpine(crateData);
     c.skeleton.setSkinByName(skin);
     c.skeleton.setSlotsToSetupPose();
     c.state.setAnimation(0, 'hp5', false);
-    add(c, 175 + i * 185, 800, 0.85);
+    add(c, 250 + i * 220, 800, 0.85);
   });
 
   // tutorial hand, tapping
