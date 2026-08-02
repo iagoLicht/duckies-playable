@@ -160,14 +160,21 @@ async function boot(): Promise<void> {
   const duckyData = await loadSkeleton({
     skelUrl: duckySkelUrl, atlasText: duckyAtlasText, pageUrl: duckyPageUrl,
   });
-  const colors = ['yellow', 'green', 'purple', 'red'] as const;
-  colors.forEach((skin, i) => {
+  // two loose rows, colours mixed and positions slightly irregular so the flock
+  // reads as floating naturally rather than lined up
+  const ducks = [
+    { skin: 'green', x: 175, y: 360 },
+    { skin: 'red', x: 455, y: 345 },
+    { skin: 'yellow', x: 285, y: 485 },
+    { skin: 'purple', x: 550, y: 470 },
+  ] as const;
+  ducks.forEach(({ skin, x, y }, i) => {
     const duck = makeSpine(duckyData);
     duck.skeleton.setSkinByName(skin);
     duck.skeleton.setSlotsToSetupPose();
     duck.state.setAnimation(0, 'idle', true);
     duck.state.timeScale = 0.8 + i * 0.13; // desync the bobbing so it's obviously live
-    add(duck, 130 + i * 155, 420, 0.9);
+    add(duck, x, y, 0.9);
   });
 
   // THE barrel (crate-round): clasps strip off per hit — hp3..hp1 damage walk,
