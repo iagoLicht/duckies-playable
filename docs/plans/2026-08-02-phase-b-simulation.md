@@ -1002,7 +1002,7 @@ export class Slingshot {
 
   begin(x: number, y: number): boolean {
     let best: Duck | null = null;
-    let bestD = SIM.GRAB_R;
+    let bestD: number = SIM.GRAB_R;
     for (const d of this.world.ducks) {
       if (d.live || d.popping) continue;
       const dist = Math.hypot(d.x - x, d.y - y);
