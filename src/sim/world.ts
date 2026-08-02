@@ -116,8 +116,20 @@ export class World {
     }
   }
 
-  /** Same-colour pop hook — implemented in Task 4 (no-op until then). */
-  protected onDuckContact(_a: Duck, _b: Duck, _relSpeed: number): void {}
+  protected onDuckContact(a: Duck, b: Duck, relSpeed: number): void {
+    if (a.colour !== b.colour) return;
+    if (a.popping || b.popping) return;
+    if (!a.live && !b.live) return;
+    if (relSpeed < SIM.POP_SPEED) return;
+    this.schedulePop(a, 0);
+    this.schedulePop(b, 0);
+  }
+
+  private schedulePop(d: Duck, delay: number): void {
+    if (d.popping) return;
+    d.popping = true;
+    this.popQueue.push({ id: d.id, at: this.time + delay });
+  }
 
   private collideDuckBarrels(): void {
     for (const d of this.ducks) {
@@ -154,6 +166,32 @@ export class World {
     }
   }
 
-  /** Chain-pop scheduling — populated in Task 4. */
-  protected processPopQueue(): void {}
+  protected processPopQueue(): void {
+    if (this.popQueue.length === 0) return;
+    const due = this.popQueue.filter((p) => p.at <= this.time);
+    this.popQueue = this.popQueue.filter((p) => p.at > this.time);
+    for (const p of due) {
+      const idx = this.ducks.findIndex((d) => d.id === p.id);
+      if (idx < 0) continue;
+      const d = this.ducks[idx]!;
+      this.ducks.splice(idx, 1);
+      this.events.push({ type: 'duckPopped', id: d.id, colour: d.colour, x: d.x, y: d.y });
+      this.blast(d.colour, d.x, d.y);
+    }
+  }
+
+  blast(colour: Colour, x: number, y: number): void {
+    this.events.push({ type: 'blast', colour, x, y, r: SIM.BLAST_R });
+    for (const d of this.ducks) {
+      if (d.colour !== colour || d.popping) continue;
+      if (Math.hypot(d.x - x, d.y - y) <= SIM.BLAST_R + SIM.DUCK_R) {
+        this.schedulePop(d, SIM.CHAIN_DELAY);
+      }
+    }
+    for (const b of [...this.barrels]) {
+      if (Math.hypot(b.x - x, b.y - y) <= SIM.BLAST_R + SIM.BARREL_R) {
+        this.damageBarrel(b, 1);
+      }
+    }
+  }
 }

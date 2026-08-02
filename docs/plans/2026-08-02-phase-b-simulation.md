@@ -786,7 +786,7 @@ describe('same-colour pops and chain blasts', () => {
 
   it('blasts damage barrels of any colour in radius', () => {
     const w = new World(1);
-    const barrel = w.spawnBarrel('purple', 380, 810, 2);
+    const barrel = w.spawnBarrel('purple', 380, 810, 3);
     const a = w.spawnDuck('red', 300, 700);
     w.spawnDuck('red', 460, 700);
     w.launch(a.id, 900, 0);
@@ -803,6 +803,8 @@ describe('same-colour pops and chain blasts', () => {
   });
 });
 ```
+
+(barrel hp 3: a pair pop emits TWO blasts — one per duck — and both reach the barrel at (380,810), so hp2 would be destroyed; hp3→1 pins the exact two-blast damage total)
 
 Run: `npx vitest run tests/sim/chains.test.ts` — Expected: FAIL.
 
