@@ -75,6 +75,20 @@ const COLORIZE = [
   },
 ];
 
+/**
+ * Cropped tileable patches. bath-wall-tile: a clean 2×2-tile block of the pink
+ * mosaic from in-game-bg.png (grout lines sit on a 90px grid; 172/434 are grout
+ * starts, 180px = one full light/dark checker period), taken from a props-free
+ * region so the tiled result shows no cropped bathroom objects.
+ */
+const EXTRACT = [
+  {
+    src: 'theme/in-game-bg.png',
+    out: 'theme/bath-wall-tile.webp',
+    left: 172, top: 434, width: 180, height: 180, q: 80,
+  },
+];
+
 /** Fonts -> woff2 subset. Title Case per brand rules, so keep both cases + digits + punctuation. */
 const FONT_CHARS =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 !?.,:/×+-\'"%';
@@ -124,6 +138,18 @@ for (const { src: rel, out: outRel, a, b, q } of COLORIZE) {
   totalIn += inSize;
   totalOut += outSize;
   console.log(`tint  ${rel.padEnd(58)} ${kb(inSize)} -> ${kb(outSize)} (q${q})`);
+}
+
+for (const { src: rel, out: outRel, left, top, width, height, q } of EXTRACT) {
+  const src = path.join(PACK, rel);
+  const out = path.join(OUT, outRel);
+  ensureDir(out);
+  const inSize = fs.statSync(src).size;
+  await sharp(src).extract({ left, top, width, height }).webp({ quality: q }).toFile(out);
+  const outSize = fs.statSync(out).size;
+  totalIn += inSize;
+  totalOut += outSize;
+  console.log(`crop  ${rel.padEnd(58)} ${kb(inSize)} -> ${kb(outSize)} (q${q})`);
 }
 
 for (const { src: rel, out: outRel } of FONTS) {

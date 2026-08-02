@@ -1,4 +1,4 @@
-import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
+import { Application, Graphics, Texture, TilingSprite } from 'pixi.js';
 import type { Spine } from '@esotericsoftware/spine-pixi-v8';
 import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
@@ -17,7 +17,7 @@ import fwRocketPageUrl from './assets/entities/firework-rocket/firework-rocket.w
 import handJsonUrl from './assets/entities/tutorial-hand/tutorial-hand.json?url';
 import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
 import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
-import bgUrl from './assets/theme/in-game-bg.webp';
+import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
 
 export const DESIGN_W = 720;
@@ -48,16 +48,19 @@ async function boot(): Promise<void> {
   // visualViewport is the listener that actually fires on mobile URL-bar collapse
   window.visualViewport?.addEventListener('resize', () => fitCanvas(app));
 
-  // pink bathroom backdrop (original in-game-bg), cover-fit — visible only
-  // OUTSIDE the bathtub
+  // pink mosaic backdrop — a clean grout-aligned patch of the original
+  // in-game-bg tiled full-screen, so no cropped bathroom props (plant, sink,
+  // slippers, towel) appear outside the tub. tileScale matches the cover-fit
+  // scale the full bg previously rendered at (1280/1050)
   const bgImg = new Image();
-  bgImg.src = bgUrl;
+  bgImg.src = wallTileUrl;
   await bgImg.decode();
-  const bg = new Sprite(Texture.from(bgImg));
-  const cover = Math.max(DESIGN_W / bg.texture.width, DESIGN_H / bg.texture.height);
-  bg.scale.set(cover);
-  bg.anchor.set(0.5);
-  bg.position.set(DESIGN_W / 2, DESIGN_H / 2);
+  const bg = new TilingSprite({
+    texture: Texture.from(bgImg),
+    width: DESIGN_W,
+    height: DESIGN_H,
+  });
+  bg.tileScale.set(1280 / 1050);
   app.stage.addChild(bg);
 
   // ── bathtub ──────────────────────────────────────────────────────────────
