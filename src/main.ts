@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Texture, TilingSprite } from 'pixi.js';
+import { Application, Graphics, Texture, TilingSprite } from 'pixi.js';
 import type { Spine } from '@esotericsoftware/spine-pixi-v8';
 import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
@@ -8,12 +8,6 @@ import duckyPageUrl from './assets/entities/ducky/ducky.webp';
 import crateSkelUrl from './assets/entities/crate-round/crate-round.skel';
 import crateAtlasText from './assets/entities/crate-round/crate-round.atlas?raw';
 import cratePageUrl from './assets/entities/crate-round/crate-round.webp';
-import fwBaseSkelUrl from './assets/entities/firework-base/firework-base.skel';
-import fwBaseAtlasText from './assets/entities/firework-base/firework-base.atlas?raw';
-import fwBasePageUrl from './assets/entities/firework-base/firework-base.webp';
-import fwRocketSkelUrl from './assets/entities/firework-rocket/firework-rocket.skel';
-import fwRocketAtlasText from './assets/entities/firework-rocket/firework-rocket.atlas?raw';
-import fwRocketPageUrl from './assets/entities/firework-rocket/firework-rocket.webp';
 import handJsonUrl from './assets/entities/tutorial-hand/tutorial-hand.json?url';
 import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
 import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
@@ -174,69 +168,13 @@ async function boot(): Promise<void> {
     add(c, 175 + i * 185, 800, 0.85);
   });
 
-  // firework crate with its rocket stock stored inside, matching the reference
-  // playable's composition: crate first, then rockets on top in two rows — back row
-  // higher/larger, front row lower/smaller, fanned ±5°, bases sunk into the foam
-  const fwBaseData = await loadSkeleton({
-    skelUrl: fwBaseSkelUrl, atlasText: fwBaseAtlasText, pageUrl: fwBasePageUrl,
-  });
-  // No `idle` on this rig, so it stays in setup pose. The DEFAULT skin renders foam
-  // only — the crate attachments are present but invisible; the `big` skin is the one
-  // that actually shows the crate (skins here are size variants, not colours).
-  const crate = { x: 360, y: 1030, w: 235 }; // w ≈ rendered width of 'big' at 0.8
-  const fwBase = makeSpine(fwBaseData);
-  fwBase.skeleton.setSkinByName('big');
-  fwBase.skeleton.setSlotsToSetupPose();
-  add(fwBase, crate.x, crate.y, 0.8);
-
-  const rocketData = await loadSkeleton({
-    skelUrl: fwRocketSkelUrl, atlasText: fwRocketAtlasText, pageUrl: fwRocketPageUrl,
-  });
-  // 2 back + 2 front, staggered so every colour reads; back row higher and larger,
-  // front row sunk toward the front wall — offsets are fractions of crate width,
-  // taken from the reference playable's crate composition
-  // Rockets sit deep in the crate per the gameplay reference: only heads + a bit
-  // of neck show above the foam. The crate's foam/front wall are one spine layer
-  // UNDER the rockets, so the "stored inside" look comes from clipping the rocket
-  // layer at the front-wall top edge — bodies and bases never show.
-  const rocketLayer = new Container();
-  const rocketClip = new Graphics()
-    .rect(crate.x - 0.44 * crate.w, crate.y - crate.w, 0.88 * crate.w, crate.w + 0.05 * crate.w)
-    .fill(0xffffff);
-  rocketLayer.mask = rocketClip;
-  // arrangement measured from the official trailer (1080p frames): four back
-  // columns in a zigzag — tall tips a full head above the rail, mid tips at rail
-  // level — plus two low heads nestled in the foam up front. Outer columns
-  // overlap the posts like the real game. x/y are fractions of crate width;
-  // draw order: tall columns first, then mids, then the front pair
-  const stock = [
-    { skin: 'purple', x: -0.1, y: -0.18, s: 1.02, a: -2 },
-    { skin: 'purple', x: 0.31, y: -0.18, s: 1.02, a: 4 },
-    { skin: 'yellow', x: -0.3, y: -0.055, s: 0.98, a: -4 },
-    { skin: 'yellow', x: 0.11, y: -0.055, s: 0.98, a: 2 },
-    { skin: 'red', x: -0.19, y: 0.05, s: 0.9, a: -3 },
-    { skin: 'green', x: 0.03, y: 0.05, s: 0.9, a: 3 },
-  ] as const;
-  for (const { skin, x, y, s, a } of stock) {
-    const r = makeSpine(rocketData);
-    r.skeleton.setSkinByName(skin);
-    r.skeleton.setSlotsToSetupPose();
-    r.state.setAnimation(0, 'idle', true);
-    r.angle = a;
-    r.position.set(crate.x + x * crate.w, crate.y + y * crate.w);
-    r.scale.set(s);
-    rocketLayer.addChild(r);
-    spines.push(r);
-  }
-  app.stage.addChild(rocketLayer, rocketClip);
-
   // tutorial hand, tapping
   const handData = await loadSkeleton({
     jsonUrl: handJsonUrl, atlasText: handAtlasText, pageUrl: handPageUrl,
   });
   const hand = makeSpine(handData);
   hand.state.setAnimation(0, 'tap', true);
-  add(hand, 600, 1160, 0.25);
+  add(hand, 360, 1120, 0.25);
 
   // one central tick for every skeleton (autoUpdate is off)
   app.ticker.add((t) => {
