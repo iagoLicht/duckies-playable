@@ -1,16 +1,5 @@
 import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
-import type { Spine } from '@esotericsoftware/spine-pixi-v8';
-import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
-import duckySkelUrl from './assets/entities/ducky/ducky.skel';
-import duckyAtlasText from './assets/entities/ducky/ducky.atlas?raw';
-import duckyPageUrl from './assets/entities/ducky/ducky.webp';
-import crateSkelUrl from './assets/entities/crate-round/crate-round.skel';
-import crateAtlasText from './assets/entities/crate-round/crate-round.atlas?raw';
-import cratePageUrl from './assets/entities/crate-round/crate-round.webp';
-import handJsonUrl from './assets/entities/tutorial-hand/tutorial-hand.json?url';
-import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
-import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
 import tipSideUrl from './assets/entities/wall-bouncers/BouncyWall-small-tip-side-outlined.webp';
@@ -224,76 +213,10 @@ async function boot(): Promise<void> {
   traceTub(tubFrame, -2).stroke({ width: 17, color: 0xe4eef1 });
   app.stage.addChild(tubFrame);
 
-  const spines: Spine[] = [];
-  const add = (s: Spine, x: number, y: number, scale: number): Spine => {
-    s.position.set(x, y);
-    s.scale.set(scale);
-    app.stage.addChild(s);
-    spines.push(s);
-    return s;
-  };
-
-  // ── THE SPIKE: four colour skins from one rig ────────────────────────────
-  const duckyData = await loadSkeleton({
-    skelUrl: duckySkelUrl, atlasText: duckyAtlasText, pageUrl: duckyPageUrl,
-  });
-  // two loose rows, colours mixed and positions slightly irregular so the flock
-  // reads as floating naturally rather than lined up
-  const ducks = [
-    { skin: 'green', x: 175, y: 360 },
-    { skin: 'red', x: 455, y: 345 },
-    { skin: 'yellow', x: 285, y: 485 },
-    { skin: 'purple', x: 550, y: 470 },
-  ] as const;
-  ducks.forEach(({ skin, x, y }, i) => {
-    const duck = makeSpine(duckyData);
-    duck.skeleton.setSkinByName(skin);
-    duck.skeleton.setSlotsToSetupPose();
-    duck.state.setAnimation(0, 'idle', true);
-    duck.state.timeScale = 0.8 + i * 0.13; // desync the bobbing so it's obviously live
-    add(duck, x, y, 0.9);
-  });
-
-  // THE barrel (crate-round): clasps strip off per hit — hp3..hp1 damage walk,
-  // then one looping `hit` wobble so the impact reaction is visible too
-  const crateData = await loadSkeleton({
-    skelUrl: crateSkelUrl, atlasText: crateAtlasText, pageUrl: cratePageUrl,
-  });
-  (['hp3', 'hp2', 'hp1'] as const).forEach((stage, i) => {
-    const c = makeSpine(crateData);
-    c.skeleton.setSkinByName('wood');
-    c.skeleton.setSlotsToSetupPose();
-    c.state.setAnimation(0, stage, false);
-    add(c, 120 + i * 165, 1090, 0.85);
-  });
-  const wobbler = makeSpine(crateData);
-  wobbler.skeleton.setSkinByName('wood');
-  wobbler.skeleton.setSlotsToSetupPose();
-  wobbler.state.setAnimation(0, 'hit', true);
-  add(wobbler, 615, 1090, 0.85);
-
-  // colour-skinned barrels (full clasps) — note: no green skin exists on this rig
-  (['yellow', 'red'] as const).forEach((skin, i) => {
-    const c = makeSpine(crateData);
-    c.skeleton.setSkinByName(skin);
-    c.skeleton.setSlotsToSetupPose();
-    c.state.setAnimation(0, 'hp5', false);
-    add(c, 250 + i * 220, 800, 0.85);
-  });
-
-  // tutorial hand, tapping
-  const handData = await loadSkeleton({
-    jsonUrl: handJsonUrl, atlasText: handAtlasText, pageUrl: handPageUrl,
-  });
-  const hand = makeSpine(handData);
-  hand.state.setAnimation(0, 'tap', true);
-  add(hand, 495, 365, 0.25); // fingertip taps right next to the red duck
-
-  // one central tick for every skeleton (autoUpdate is off)
-  app.ticker.add((t) => {
-    const dt = t.deltaMS / 1000;
-    for (const s of spines) s.update(dt);
-  });
+  // ── the live game: sim-driven entities, input, fx ────────────────────────
+  const { GameScene } = await import('./game/scene');
+  const scene = new GameScene(app, 20260802);
+  await scene.init();
 
   // deterministic readiness signal for the screenshot harness
   (window as unknown as { __sceneReady?: boolean }).__sceneReady = true;
