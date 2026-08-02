@@ -180,13 +180,13 @@ async function boot(): Promise<void> {
     c.skeleton.setSkinByName('wood');
     c.skeleton.setSlotsToSetupPose();
     c.state.setAnimation(0, stage, false);
-    add(c, 120 + i * 165, 640, 0.85);
+    add(c, 120 + i * 165, 1090, 0.85);
   });
   const wobbler = makeSpine(crateData);
   wobbler.skeleton.setSkinByName('wood');
   wobbler.skeleton.setSlotsToSetupPose();
   wobbler.state.setAnimation(0, 'hit', true);
-  add(wobbler, 615, 640, 0.85);
+  add(wobbler, 615, 1090, 0.85);
 
   // colour-skinned barrels (full clasps) — note: no green skin exists on this rig
   (['yellow', 'purple', 'red'] as const).forEach((skin, i) => {
@@ -203,7 +203,7 @@ async function boot(): Promise<void> {
   });
   const hand = makeSpine(handData);
   hand.state.setAnimation(0, 'tap', true);
-  add(hand, 360, 1120, 0.25);
+  add(hand, 360, 600, 0.25);
 
   // one central tick for every skeleton (autoUpdate is off)
   app.ticker.add((t) => {
