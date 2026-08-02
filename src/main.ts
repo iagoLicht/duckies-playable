@@ -1,4 +1,4 @@
-import { Application, Graphics, Texture, TilingSprite } from 'pixi.js';
+import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
 import type { Spine } from '@esotericsoftware/spine-pixi-v8';
 import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
@@ -17,6 +17,7 @@ import fwRocketPageUrl from './assets/entities/firework-rocket/firework-rocket.w
 import handJsonUrl from './assets/entities/tutorial-hand/tutorial-hand.json?url';
 import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
 import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
+import bgUrl from './assets/theme/in-game-bg.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
 
 export const DESIGN_W = 720;
@@ -33,7 +34,7 @@ async function boot(): Promise<void> {
   await app.init({
     width: DESIGN_W,
     height: DESIGN_H,
-    backgroundColor: 0x16b3e4,
+    backgroundColor: 0xf8dfe4,
     preference: 'webgl',
     antialias: false,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
@@ -47,8 +48,49 @@ async function boot(): Promise<void> {
   // visualViewport is the listener that actually fires on mobile URL-bar collapse
   window.visualViewport?.addEventListener('resize', () => fitCanvas(app));
 
-  // full-screen water floor — the colourized blue tile covers the whole stage,
-  // no separate pool area or pink surround
+  // pink bathroom backdrop (original in-game-bg), cover-fit — visible only
+  // OUTSIDE the bathtub
+  const bgImg = new Image();
+  bgImg.src = bgUrl;
+  await bgImg.decode();
+  const bg = new Sprite(Texture.from(bgImg));
+  const cover = Math.max(DESIGN_W / bg.texture.width, DESIGN_H / bg.texture.height);
+  bg.scale.set(cover);
+  bg.anchor.set(0.5);
+  bg.position.set(DESIGN_W / 2, DESIGN_H / 2);
+  app.stage.addChild(bg);
+
+  // ── bathtub ──────────────────────────────────────────────────────────────
+  // The real game's tub silhouette: straight top edge set between "shoulder"
+  // corners that step down and bulge outward into the side edges; plain rounded
+  // corners at the bottom. No tub texture exists in the asset pack (the game
+  // builds the rim from level poolPolygons + a gradient map that isn't shipped),
+  // so the shape is traced procedurally to match the gameplay reference.
+  const tub = { l: 26, t: 200, r: 694, b: 1254, s: 52, d: 60 };
+  const traceTub = (g: Graphics, o: number): Graphics => {
+    // o > 0 shrinks the path inward; o < 0 grows it outward
+    const l = tub.l + o, t = tub.t + o, r = tub.r - o, b = tub.b - o;
+    const { s, d } = tub;
+    const rc = 18; // small top-corner arc
+    const rb = 46 - o; // bottom corner radius
+    g.moveTo(l + s + rc, t);
+    g.lineTo(r - s - rc, t);
+    g.arcTo(r - s, t, r - s, t + rc, rc);
+    g.lineTo(r - s, t + d - rc);
+    g.bezierCurveTo(r - s, t + d + 18, r, t + d, r, t + d + 26);
+    g.lineTo(r, b - rb);
+    g.arcTo(r, b, r - rb, b, rb);
+    g.lineTo(l + rb, b);
+    g.arcTo(l, b, l, b - rb, rb);
+    g.lineTo(l, t + d + 26);
+    g.bezierCurveTo(l, t + d, l + s, t + d + 18, l + s, t + d - rc);
+    g.lineTo(l + s, t + rc);
+    g.arcTo(l + s, t, l + s + rc, t, rc);
+    g.closePath();
+    return g;
+  };
+
+  // water tiles, clipped to the tub interior
   const poolImg = new Image();
   poolImg.src = poolTileUrl;
   await poolImg.decode();
@@ -58,17 +100,16 @@ async function boot(): Promise<void> {
     height: DESIGN_H,
   });
   water.tileScale.set(1.3); // tile pitch ≈ the example's 1.35 world units at our ppu
-  app.stage.addChild(water);
+  const waterMask = traceTub(new Graphics(), 10).fill(0xffffff);
+  water.mask = waterMask;
+  app.stage.addChild(water, waterMask);
 
-  // bathtub rim around the playfield — same recipe the reference playable draws
-  // procedurally (no tub texture exists in the asset pack): a rounded rect stroked
-  // dark #2f9fd4 with a lighter #aff0ff band on top, leaving thin dark edges
-  const tub = { x: 10, y: 10, w: DESIGN_W - 20, h: DESIGN_H - 20, r: 50 };
-  const tubFrame = new Graphics()
-    .roundRect(tub.x, tub.y, tub.w, tub.h, tub.r)
-    .stroke({ width: 20, color: 0x2f9fd4 })
-    .roundRect(tub.x, tub.y, tub.w, tub.h, tub.r)
-    .stroke({ width: 11, color: 0xaff0ff });
+  // rim band: navy outline sandwich, near-white band, cool shadow along the
+  // inner edge — colours matched to the gameplay reference
+  const tubFrame = new Graphics();
+  traceTub(tubFrame, 0).stroke({ width: 30, color: 0x1a2430 });
+  traceTub(tubFrame, 0).stroke({ width: 24, color: 0xa9c6cc });
+  traceTub(tubFrame, -2).stroke({ width: 17, color: 0xe4eef1 });
   app.stage.addChild(tubFrame);
 
   const spines: Spine[] = [];
