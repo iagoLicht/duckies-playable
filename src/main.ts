@@ -1,4 +1,4 @@
-import { Application, Texture, TilingSprite } from 'pixi.js';
+import { Application, Graphics, Texture, TilingSprite } from 'pixi.js';
 import type { Spine } from '@esotericsoftware/spine-pixi-v8';
 import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
@@ -60,6 +60,17 @@ async function boot(): Promise<void> {
   water.tileScale.set(1.3); // tile pitch ≈ the example's 1.35 world units at our ppu
   app.stage.addChild(water);
 
+  // bathtub rim around the playfield — same recipe the reference playable draws
+  // procedurally (no tub texture exists in the asset pack): a rounded rect stroked
+  // dark #2f9fd4 with a lighter #aff0ff band on top, leaving thin dark edges
+  const tub = { x: 10, y: 10, w: DESIGN_W - 20, h: DESIGN_H - 20, r: 50 };
+  const tubFrame = new Graphics()
+    .roundRect(tub.x, tub.y, tub.w, tub.h, tub.r)
+    .stroke({ width: 20, color: 0x2f9fd4 })
+    .roundRect(tub.x, tub.y, tub.w, tub.h, tub.r)
+    .stroke({ width: 11, color: 0xaff0ff });
+  app.stage.addChild(tubFrame);
+
   const spines: Spine[] = [];
   const add = (s: Spine, x: number, y: number, scale: number): Spine => {
     s.position.set(x, y);
@@ -110,27 +121,42 @@ async function boot(): Promise<void> {
     add(c, 175 + i * 185, 800, 0.85);
   });
 
-  // firework crate + one rocket per colour skin
+  // firework crate with its rocket stock stored inside, matching the reference
+  // playable's composition: crate first, then rockets on top in two rows — back row
+  // higher/larger, front row lower/smaller, fanned ±5°, bases sunk into the foam
   const fwBaseData = await loadSkeleton({
     skelUrl: fwBaseSkelUrl, atlasText: fwBaseAtlasText, pageUrl: fwBasePageUrl,
   });
   // No `idle` on this rig, so it stays in setup pose. The DEFAULT skin renders foam
   // only — the crate attachments are present but invisible; the `big` skin is the one
   // that actually shows the crate (skins here are size variants, not colours).
+  const crate = { x: 360, y: 1030, w: 235 }; // w ≈ rendered width of 'big' at 0.8
   const fwBase = makeSpine(fwBaseData);
   fwBase.skeleton.setSkinByName('big');
   fwBase.skeleton.setSlotsToSetupPose();
-  add(fwBase, 200, 980, 0.8);
+  add(fwBase, crate.x, crate.y, 0.8);
 
   const rocketData = await loadSkeleton({
     skelUrl: fwRocketSkelUrl, atlasText: fwRocketAtlasText, pageUrl: fwRocketPageUrl,
   });
-  (['yellow', 'green', 'purple', 'red'] as const).forEach((skin, i) => {
+  // 2 back + 2 front, staggered so every colour reads; back row higher and larger,
+  // front row sunk toward the front wall — offsets are fractions of crate width,
+  // taken from the reference playable's crate composition
+  const stock = ['red', 'green', 'purple', 'yellow'] as const;
+  stock.forEach((skin, i) => {
+    const back = i < 2;
+    const g = (back ? i : i - 2) === 0 ? -0.5 : 0.5;
     const r = makeSpine(rocketData);
     r.skeleton.setSkinByName(skin);
     r.skeleton.setSlotsToSetupPose();
     r.state.setAnimation(0, 'idle', true);
-    add(r, 420 + i * 70, 980, 0.8);
+    r.angle = (back ? 8 : 4) * g;
+    add(
+      r,
+      crate.x + g * crate.w * (back ? 0.32 : 0.14),
+      crate.y + (back ? -0.27 : -0.045) * crate.w,
+      back ? 1.0 : 0.88,
+    );
   });
 
   // tutorial hand, tapping
@@ -139,7 +165,7 @@ async function boot(): Promise<void> {
   });
   const hand = makeSpine(handData);
   hand.state.setAnimation(0, 'tap', true);
-  add(hand, 360, 1150, 0.25);
+  add(hand, 600, 1160, 0.25);
 
   // one central tick for every skeleton (autoUpdate is off)
   app.ticker.add((t) => {
