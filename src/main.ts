@@ -13,8 +13,8 @@ import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?r
 import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
-import triBottomUrl from './assets/entities/wall-bouncers/BouncyWall-triangle-bottom.webp';
-import barHorizUrl from './assets/entities/wall-bouncers/BouncyWall-wall-horizontal.webp';
+import tipSideUrl from './assets/entities/wall-bouncers/BouncyWall-small-tip-side-outlined.webp';
+import barTopUrl from './assets/entities/wall-bouncers/BouncyWall-top-outlined.webp';
 
 export const DESIGN_W = 720;
 export const DESIGN_H = 1280;
@@ -193,23 +193,23 @@ async function boot(): Promise<void> {
     await img.decode();
     return Texture.from(img);
   };
-  const innerFace = 24; // border centerline -> inner face (navy 15 + white ring 9)
-  const triLeft = new Sprite(await loadTex(triBottomUrl));
-  triLeft.anchor.set(0, 0.5);
-  triLeft.scale.set(0.6);
-  triLeft.position.set(tub.l + innerFace - 8, 950);
-  // exact mirror of the left triangle: same art flipped horizontally, mounted at
-  // the symmetric position on the right wall, same height
-  const triRight = new Sprite(triLeft.texture);
-  triRight.anchor.set(0, 0.5);
-  triRight.scale.set(-0.6, 0.6);
-  triRight.position.set(DESIGN_W - (tub.l + innerFace - 8), 950);
-  const bar = new Sprite(await loadTex(barHorizUrl));
-  bar.anchor.set(0.5, 0);
-  bar.scale.set(0.7);
-  // the art has ~29px transparent padding above the pill at this scale — offset
-  // so the opaque top edge tucks 4px into the border
-  bar.position.set(480, tub.t + innerFace - 33);
+  // Small-tip triangle (per the gameplay reference): flat edge sits ON the white
+  // inner ring, tip pointing into the water; the baked white outline merges with
+  // the ring. Anchor is at the art's flat edge (opaque right edge 125px of 164).
+  const tipTex = await loadTex(tipSideUrl);
+  const triLeft = new Sprite(tipTex);
+  triLeft.anchor.set(125 / 164, 0.5);
+  triLeft.scale.set(-1, 1); // art points left; mirror so the tip points into the field
+  triLeft.position.set(tub.l + 24, 950);
+  const triRight = new Sprite(tipTex);
+  triRight.anchor.set(125 / 164, 0.5);
+  triRight.position.set(DESIGN_W - (tub.l + 24), 950);
+  // bar bumper sleeves the border itself (per the reference): centered on the
+  // top band, sticking out evenly on both sides
+  const bar = new Sprite(await loadTex(barTopUrl));
+  bar.anchor.set(0.5);
+  bar.scale.set(0.4);
+  bar.position.set(480, tub.t);
   app.stage.addChild(triLeft, triRight, bar);
 
   const spines: Spine[] = [];

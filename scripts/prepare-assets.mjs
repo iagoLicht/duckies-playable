@@ -89,6 +89,54 @@ const EXTRACT = [
   },
 ];
 
+/**
+ * Entity-style outlined variants: bake the white sticker outline + soft drop
+ * shadow around a sprite, the way the entity atlas pages carry baked white base
+ * blobs + blurred shadow pieces. grow = outline thickness in px at native scale
+ * (pick so outline ≈ 8px at the sprite's final scene scale).
+ */
+const OUTLINE = [
+  {
+    src: 'entities/wall-bouncers/BouncyWall-small-tip-side.png',
+    out: 'entities/wall-bouncers/BouncyWall-small-tip-side-outlined.webp',
+    grow: 8, q: 82,
+  },
+  {
+    src: 'entities/wall-bouncers/BouncyWall-top.png',
+    out: 'entities/wall-bouncers/BouncyWall-top-outlined.webp',
+    grow: 20, q: 82,
+  },
+];
+
+async function bakeOutline(srcPath, outPath, grow, q) {
+  const m = grow + 14; // margin for outline + shadow spill
+  const meta = await sharp(srcPath).metadata();
+  const W = meta.width + 2 * m;
+  const H = meta.height + 2 * m;
+  const padded = await sharp(srcPath).ensureAlpha()
+    .extend({ top: m, bottom: m, left: m, right: m, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png().toBuffer();
+  // dilate the alpha: blur + low threshold grows the silhouette ~`grow`px with
+  // naturally rounded (blobby) corners, matching the hand-drawn base style
+  // two separate passes — inside one sharp pipeline the operation order is fixed
+  // (threshold would run before blur), which would kill the dilation
+  const blurredAlpha = await sharp(padded).extractChannel(3)
+    .blur(grow / 1.3).png().toBuffer();
+  const dilated = await sharp(blurredAlpha).threshold(8).png().toBuffer();
+  const white = await sharp({ create: { width: W, height: H, channels: 3, background: '#ffffff' } })
+    .joinChannel(dilated).png().toBuffer();
+  const shadowAlpha = await sharp(dilated).blur(3).linear(0.25, 0).png().toBuffer();
+  const shadow = await sharp({ create: { width: W, height: H, channels: 3, background: '#1c5a7a' } })
+    .joinChannel(shadowAlpha).png().toBuffer();
+  await sharp({ create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .composite([
+      { input: shadow, top: 7, left: 0 },
+      { input: white, top: 0, left: 0 },
+      { input: padded, top: 0, left: 0 },
+    ])
+    .webp({ quality: q }).toFile(outPath);
+}
+
 /** Fonts -> woff2 subset. Title Case per brand rules, so keep both cases + digits + punctuation. */
 const FONT_CHARS =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 !?.,:/×+-\'"%';
@@ -150,6 +198,18 @@ for (const { src: rel, out: outRel, left, top, width, height, q } of EXTRACT) {
   totalIn += inSize;
   totalOut += outSize;
   console.log(`crop  ${rel.padEnd(58)} ${kb(inSize)} -> ${kb(outSize)} (q${q})`);
+}
+
+for (const { src: rel, out: outRel, grow, q } of OUTLINE) {
+  const src = path.join(PACK, rel);
+  const out = path.join(OUT, outRel);
+  ensureDir(out);
+  const inSize = fs.statSync(src).size;
+  await bakeOutline(src, out, grow, q);
+  const outSize = fs.statSync(out).size;
+  totalIn += inSize;
+  totalOut += outSize;
+  console.log(`otln  ${rel.padEnd(58)} ${kb(inSize)} -> ${kb(outSize)} (grow ${grow})`);
 }
 
 for (const { src: rel, out: outRel } of FONTS) {
