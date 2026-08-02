@@ -14,7 +14,6 @@ import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
 import tipSideUrl from './assets/entities/wall-bouncers/BouncyWall-small-tip-side-outlined.webp';
-import barTopUrl from './assets/entities/wall-bouncers/BouncyWall-top-outlined.webp';
 
 export const DESIGN_W = 720;
 export const DESIGN_H = 1280;
@@ -211,15 +210,6 @@ async function boot(): Promise<void> {
   traceTub(tubFrame, 0).stroke({ width: 24, color: 0xa9c6cc });
   traceTub(tubFrame, -2).stroke({ width: 17, color: 0xe4eef1 });
   app.stage.addChild(tubFrame);
-
-  // bar bumper sleeves the border itself (per the reference): centered on the
-  // top band, sticking out evenly on both sides — above the frame, unlike the
-  // triangles which merge with the inner ring
-  const bar = new Sprite(await loadTex(barTopUrl));
-  bar.anchor.set(0.5);
-  bar.scale.set(0.4);
-  bar.position.set(480, tub.t);
-  app.stage.addChild(bar);
 
   const spines: Spine[] = [];
   const add = (s: Spine, x: number, y: number, scale: number): Spine => {
