@@ -1,4 +1,4 @@
-import { Application, Graphics, Texture, TilingSprite } from 'pixi.js';
+import { Application, Container, Graphics, Texture, TilingSprite } from 'pixi.js';
 import type { Spine } from '@esotericsoftware/spine-pixi-v8';
 import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
@@ -195,6 +195,15 @@ async function boot(): Promise<void> {
   // 2 back + 2 front, staggered so every colour reads; back row higher and larger,
   // front row sunk toward the front wall — offsets are fractions of crate width,
   // taken from the reference playable's crate composition
+  // Rockets sit deep in the crate per the gameplay reference: only heads + a bit
+  // of neck show above the foam. The crate's foam/front wall are one spine layer
+  // UNDER the rockets, so the "stored inside" look comes from clipping the rocket
+  // layer at the front-wall top edge — bodies and bases never show.
+  const rocketLayer = new Container();
+  const rocketClip = new Graphics()
+    .rect(crate.x - crate.w, crate.y - crate.w, crate.w * 2, crate.w + 0.05 * crate.w)
+    .fill(0xffffff);
+  rocketLayer.mask = rocketClip;
   const stock = ['red', 'green', 'purple', 'yellow'] as const;
   stock.forEach((skin, i) => {
     const back = i < 2;
@@ -203,14 +212,16 @@ async function boot(): Promise<void> {
     r.skeleton.setSkinByName(skin);
     r.skeleton.setSlotsToSetupPose();
     r.state.setAnimation(0, 'idle', true);
-    r.angle = (back ? 8 : 4) * g;
-    add(
-      r,
-      crate.x + g * crate.w * (back ? 0.32 : 0.14),
-      crate.y + (back ? -0.27 : -0.045) * crate.w,
-      back ? 1.0 : 0.88,
+    r.angle = (back ? 10 : 6) * g;
+    r.position.set(
+      crate.x + g * crate.w * (back ? 0.34 : 0.15),
+      crate.y + (back ? -0.13 : 0.04) * crate.w,
     );
+    r.scale.set(back ? 1.05 : 0.92);
+    rocketLayer.addChild(r);
+    spines.push(r);
   });
+  app.stage.addChild(rocketLayer, rocketClip);
 
   // tutorial hand, tapping
   const handData = await loadSkeleton({
