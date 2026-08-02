@@ -13,7 +13,6 @@ import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?r
 import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
-import triTopUrl from './assets/entities/wall-bouncers/BouncyWall-triangle-top.webp';
 import triBottomUrl from './assets/entities/wall-bouncers/BouncyWall-triangle-bottom.webp';
 import barHorizUrl from './assets/entities/wall-bouncers/BouncyWall-wall-horizontal.webp';
 
@@ -130,21 +129,23 @@ async function boot(): Promise<void> {
     return Texture.from(img);
   };
   const innerFace = 24; // border centerline -> inner face (navy 15 + white ring 9)
-  const triTop = new Sprite(await loadTex(triTopUrl));
-  triTop.anchor.set(1, 0.5);
-  triTop.scale.set(0.6);
-  triTop.position.set(tub.r - innerFace + 10, 538);
-  const triBottom = new Sprite(await loadTex(triBottomUrl));
-  triBottom.anchor.set(0, 0.5);
-  triBottom.scale.set(0.6);
-  triBottom.position.set(tub.l + innerFace - 8, 950);
+  const triLeft = new Sprite(await loadTex(triBottomUrl));
+  triLeft.anchor.set(0, 0.5);
+  triLeft.scale.set(0.6);
+  triLeft.position.set(tub.l + innerFace - 8, 950);
+  // exact mirror of the left triangle: same art flipped horizontally, mounted at
+  // the symmetric position on the right wall, same height
+  const triRight = new Sprite(triLeft.texture);
+  triRight.anchor.set(0, 0.5);
+  triRight.scale.set(-0.6, 0.6);
+  triRight.position.set(DESIGN_W - (tub.l + innerFace - 8), 950);
   const bar = new Sprite(await loadTex(barHorizUrl));
   bar.anchor.set(0.5, 0);
   bar.scale.set(0.7);
   // the art has ~29px transparent padding above the pill at this scale — offset
   // so the opaque top edge tucks 4px into the border
   bar.position.set(480, tub.t + innerFace - 33);
-  app.stage.addChild(triTop, triBottom, bar);
+  app.stage.addChild(triLeft, triRight, bar);
 
   const spines: Spine[] = [];
   const add = (s: Spine, x: number, y: number, scale: number): Spine => {
