@@ -148,41 +148,54 @@ async function boot(): Promise<void> {
     arc(l + s + rc, t + rc, rc, 2 * H, 3 * H);
     return pts;
   };
-  const wobble = (
-    pts: Array<{ x: number; y: number }>, amp: number, maxIn = Infinity,
-  ): Array<{ x: number; y: number }> => {
-    // deterministic smooth noise along the perimeter, pushed toward the tub centre
-    const cx = (tub.l + tub.r) / 2, cy = (tub.t + tub.b) / 2;
+  // The ring is built from the EXACT frame centerline geometry, offset along
+  // true per-point normals — parametric insetting drifts off-parallel at the
+  // shoulder curves, which is what caused hairline gaps against the frame.
+  const base = tubRingPoints(0);
+  const cx = (tub.l + tub.r) / 2, cy = (tub.t + tub.b) / 2;
+  const normals = base.map((p, i) => {
+    const prev = base[(i + base.length - 1) % base.length] ?? p;
+    const next = base[(i + 1) % base.length] ?? p;
+    let nx = -(next.y - prev.y), ny = next.x - prev.x;
+    const len = Math.hypot(nx, ny) || 1;
+    nx /= len; ny /= len;
+    if (nx * (cx - p.x) + ny * (cy - p.y) < 0) { nx = -nx; ny = -ny; }
+    return { nx, ny };
+  });
+  const dists: number[] = [];
+  {
     let dist = 0;
-    let prev = pts[0] ?? { x: 0, y: 0 };
-    return pts.map((p) => {
+    let prev = base[0] ?? { x: 0, y: 0 };
+    for (const p of base) {
       dist += Math.hypot(p.x - prev.x, p.y - prev.y);
       prev = p;
-      // gentle large-scale undulation (wavelengths ~200-1200px) — the entity
-      // bases have smooth blobby edges, not high-frequency wiggle
-      // clamp the inward push (positive n) so the ring's outer edge never pulls
-      // away from the frame — outward push just tucks further under it
-      const n = Math.min(
-        maxIn,
-        amp * (Math.sin(dist * 0.012) * 0.8 + Math.sin(dist * 0.031 + 2.1) * 0.5 + Math.sin(dist * 0.0052 + 0.7) * 0.6),
-      );
-      const dx = cx - p.x, dy = cy - p.y;
-      const len = Math.hypot(dx, dy) || 1;
-      return { x: p.x + (dx / len) * n, y: p.y + (dy / len) * n };
+      dists.push(dist);
+    }
+  }
+  // gentle large-scale undulation (wavelengths ~200-1200px) — the entity bases
+  // have smooth blobby edges, not high-frequency wiggle
+  const wob = (dist: number): number =>
+    2.6 * (Math.sin(dist * 0.012) * 0.8 + Math.sin(dist * 0.031 + 2.1) * 0.5 + Math.sin(dist * 0.0052 + 0.7) * 0.6);
+  const ringLoop = (d: (i: number) => number): Array<{ x: number; y: number }> =>
+    base.map((p, i) => {
+      const n = normals[i] ?? { nx: 0, ny: 0 };
+      return { x: p.x + n.nx * d(i), y: p.y + n.ny * d(i) };
     });
-  };
   // soft feathered shadow (like the blurred shadow pieces in the entity sheets):
   // faked with concentric strokes at falling widths / rising alpha
-  const shadowPts = wobble(tubRingPoints(24), 2.6).map((p) => ({ x: p.x, y: p.y + 3 }));
+  const shadowPts = ringLoop((i) => 25 + wob(dists[i] ?? 0)).map((p) => ({ x: p.x, y: p.y + 3 }));
   const ringShadow = new Graphics();
   for (const [w, a] of [[14, 0.07], [10, 0.1], [6, 0.14]] as const) {
     ringShadow.poly(shadowPts).stroke({ width: w, color: 0x2a6d92, alpha: a, join: 'round', cap: 'round' });
   }
-  // centerline 17.5, width 9: outer edge spans 8..15 — always at or under the
-  // frame's inner edge (15), so the line sits stuck to the border everywhere
+  // two overlapping strokes: a base anchored under the frame's inner edge (can
+  // never gap — same geometry, true-normal offset) plus a wobbled stroke giving
+  // the organic inner edge; their union reads as one hand-drawn band
   const ringWhite = new Graphics()
-    .poly(wobble(tubRingPoints(17.5), 2.6, 2.0))
-    .stroke({ width: 9, color: 0xffffff, join: 'round', cap: 'round' });
+    .poly(ringLoop(() => 15.5))
+    .stroke({ width: 7, color: 0xffffff, join: 'round', cap: 'round' })
+    .poly(ringLoop((i) => 19 + Math.max(-2.5, Math.min(2.5, wob(dists[i] ?? 0)))))
+    .stroke({ width: 7, color: 0xffffff, join: 'round', cap: 'round' });
 
   // triangle bumpers load before the ring is layered: they sit BETWEEN the ring
   // shadow and the ring white line, so the white line paints over the seam and
