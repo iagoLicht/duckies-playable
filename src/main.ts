@@ -287,7 +287,7 @@ async function boot(): Promise<void> {
   });
   const hand = makeSpine(handData);
   hand.state.setAnimation(0, 'tap', true);
-  add(hand, 360, 600, 0.25);
+  add(hand, 495, 365, 0.25); // fingertip taps right next to the red duck
 
   // one central tick for every skeleton (autoUpdate is off)
   app.ticker.add((t) => {
