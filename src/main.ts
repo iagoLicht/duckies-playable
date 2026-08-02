@@ -1,4 +1,4 @@
-import { Application, Graphics, Texture, TilingSprite } from 'pixi.js';
+import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
 import type { Spine } from '@esotericsoftware/spine-pixi-v8';
 import { loadSkeleton, makeSpine } from './engine/spineLoader';
 
@@ -13,6 +13,9 @@ import handAtlasText from './assets/entities/tutorial-hand/tutorial-hand.atlas?r
 import handPageUrl from './assets/entities/tutorial-hand/tutorial-hand.webp';
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
+import triTopUrl from './assets/entities/wall-bouncers/BouncyWall-triangle-top.webp';
+import triBottomUrl from './assets/entities/wall-bouncers/BouncyWall-triangle-bottom.webp';
+import barHorizUrl from './assets/entities/wall-bouncers/BouncyWall-wall-horizontal.webp';
 
 export const DESIGN_W = 720;
 export const DESIGN_H = 1280;
@@ -117,6 +120,31 @@ async function boot(): Promise<void> {
   traceTub(tubFrame, 0).stroke({ width: 24, color: 0xa9c6cc });
   traceTub(tubFrame, -2).stroke({ width: 17, color: 0xe4eef1 });
   app.stage.addChild(tubFrame);
+
+  // wall bouncers — pink jelly deflectors mounted flush on the tub's inner wall
+  // (flat edge against the border, slope facing the water), like the real game
+  const loadTex = async (url: string): Promise<Texture> => {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return Texture.from(img);
+  };
+  const innerFace = 24; // border centerline -> inner face (navy 15 + white ring 9)
+  const triTop = new Sprite(await loadTex(triTopUrl));
+  triTop.anchor.set(1, 0.5);
+  triTop.scale.set(0.6);
+  triTop.position.set(tub.r - innerFace + 10, 538);
+  const triBottom = new Sprite(await loadTex(triBottomUrl));
+  triBottom.anchor.set(0, 0.5);
+  triBottom.scale.set(0.6);
+  triBottom.position.set(tub.l + innerFace - 8, 950);
+  const bar = new Sprite(await loadTex(barHorizUrl));
+  bar.anchor.set(0.5, 0);
+  bar.scale.set(0.7);
+  // the art has ~29px transparent padding above the pill at this scale — offset
+  // so the opaque top edge tucks 4px into the border
+  bar.position.set(480, tub.t + innerFace - 33);
+  app.stage.addChild(triTop, triBottom, bar);
 
   const spines: Spine[] = [];
   const add = (s: Spine, x: number, y: number, scale: number): Spine => {
