@@ -90,6 +90,12 @@ async function boot(): Promise<void> {
     return g;
   };
 
+  // white ground-shadow outline around the tub, matching the sticker-style white
+  // rim baked into every entity's art — drawn under the water + frame so only the
+  // ~9px outside the navy line shows
+  const tubHalo = traceTub(new Graphics(), 0).stroke({ width: 48, color: 0xffffff });
+  app.stage.addChild(tubHalo);
+
   // water tiles, clipped to the tub interior
   const poolImg = new Image();
   poolImg.src = poolTileUrl;
