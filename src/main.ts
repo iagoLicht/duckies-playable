@@ -90,12 +90,6 @@ async function boot(): Promise<void> {
     return g;
   };
 
-  // white ground-shadow outline around the tub, matching the sticker-style white
-  // rim baked into every entity's art — drawn under the water + frame so only the
-  // ~9px outside the navy line shows
-  const tubHalo = traceTub(new Graphics(), 0).stroke({ width: 48, color: 0xffffff });
-  app.stage.addChild(tubHalo);
-
   // water tiles, clipped to the tub interior
   const poolImg = new Image();
   poolImg.src = poolTileUrl;
@@ -109,6 +103,15 @@ async function boot(): Promise<void> {
   const waterMask = traceTub(new Graphics(), 10).fill(0xffffff);
   water.mask = waterMask;
   app.stage.addChild(water, waterMask);
+
+  // white ground-shadow ring hugging the inside wall of the tub — same sticker
+  // style as the white base under every entity. Drawn over the water, clipped to
+  // the tub interior, then the frame covers its outer half: ~9px shows against
+  // the water, flush with the frame's inner edge
+  const tubHalo = traceTub(new Graphics(), 0).stroke({ width: 48, color: 0xffffff });
+  const haloMask = traceTub(new Graphics(), 10).fill(0xffffff);
+  tubHalo.mask = haloMask;
+  app.stage.addChild(tubHalo, haloMask);
 
   // rim band: navy outline sandwich, near-white band, cool shadow along the
   // inner edge — colours matched to the gameplay reference
