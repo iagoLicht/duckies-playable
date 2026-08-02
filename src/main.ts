@@ -103,14 +103,73 @@ async function boot(): Promise<void> {
   water.mask = waterMask;
   app.stage.addChild(water, waterMask);
 
-  // white ground-shadow ring hugging the inside wall of the tub — same sticker
-  // style as the white base under every entity. Drawn over the water, clipped to
-  // the tub interior, then the frame covers its outer half: ~9px shows against
-  // the water, flush with the frame's inner edge
-  const tubHalo = traceTub(new Graphics(), 0).stroke({ width: 48, color: 0xffffff });
-  const haloMask = traceTub(new Graphics(), 10).fill(0xffffff);
-  tubHalo.mask = haloMask;
-  app.stage.addChild(tubHalo, haloMask);
+  // white ring hugging the inside wall — same hand-drawn sticker style as the
+  // white base under every entity: NOT a perfect stroke. The boundary is sampled
+  // into a polyline and each point is nudged by smooth low-frequency wobble, and
+  // a soft darker water-shadow line runs just inside it.
+  const tubRingPoints = (o: number): Array<{ x: number; y: number }> => {
+    const l = tub.l + o, t = tub.t + o, r = tub.r - o, b = tub.b - o;
+    const { s, d } = tub;
+    const rc = 18;
+    const rb = 46 - o;
+    const pts: Array<{ x: number; y: number }> = [];
+    const line = (x1: number, y1: number, x2: number, y2: number): void => {
+      const n = Math.max(2, Math.round(Math.hypot(x2 - x1, y2 - y1) / 26));
+      for (let i = 0; i < n; i++) pts.push({ x: x1 + ((x2 - x1) * i) / n, y: y1 + ((y2 - y1) * i) / n });
+    };
+    const arc = (cx: number, cy: number, rad: number, a1: number, a2: number): void => {
+      for (let i = 0; i < 8; i++) {
+        const a = a1 + ((a2 - a1) * i) / 8;
+        pts.push({ x: cx + rad * Math.cos(a), y: cy + rad * Math.sin(a) });
+      }
+    };
+    const bez = (
+      p0: [number, number], c1: [number, number], c2: [number, number], p1: [number, number],
+    ): void => {
+      for (let i = 0; i < 10; i++) {
+        const u = i / 10, v = 1 - u;
+        pts.push({
+          x: v * v * v * p0[0] + 3 * v * v * u * c1[0] + 3 * v * u * u * c2[0] + u * u * u * p1[0],
+          y: v * v * v * p0[1] + 3 * v * v * u * c1[1] + 3 * v * u * u * c2[1] + u * u * u * p1[1],
+        });
+      }
+    };
+    const H = Math.PI / 2;
+    line(l + s + rc, t, r - s - rc, t);
+    arc(r - s - rc, t + rc, rc, -H, 0);
+    line(r - s, t + rc, r - s, t + d - rc);
+    bez([r - s, t + d - rc], [r - s, t + d + 18], [r, t + d], [r, t + d + 26]);
+    line(r, t + d + 26, r, b - rb);
+    arc(r - rb, b - rb, rb, 0, H);
+    line(r - rb, b, l + rb, b);
+    arc(l + rb, b - rb, rb, H, 2 * H);
+    line(l, b - rb, l, t + d + 26);
+    bez([l, t + d + 26], [l, t + d], [l + s, t + d + 18], [l + s, t + d - rc]);
+    line(l + s, t + d - rc, l + s, t + rc);
+    arc(l + s + rc, t + rc, rc, 2 * H, 3 * H);
+    return pts;
+  };
+  const wobble = (pts: Array<{ x: number; y: number }>, amp: number): Array<{ x: number; y: number }> => {
+    // deterministic smooth noise along the perimeter, pushed toward the tub centre
+    const cx = (tub.l + tub.r) / 2, cy = (tub.t + tub.b) / 2;
+    let dist = 0;
+    let prev = pts[0] ?? { x: 0, y: 0 };
+    return pts.map((p) => {
+      dist += Math.hypot(p.x - prev.x, p.y - prev.y);
+      prev = p;
+      const n = amp * (Math.sin(dist * 0.045) * 0.9 + Math.sin(dist * 0.11 + 2.1) * 0.6 + Math.sin(dist * 0.021 + 0.7) * 0.5);
+      const dx = cx - p.x, dy = cy - p.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: p.x + (dx / len) * n, y: p.y + (dy / len) * n };
+    });
+  };
+  const ringShadow = new Graphics()
+    .poly(wobble(tubRingPoints(26), 2.0).map((p) => ({ x: p.x, y: p.y + 2 })))
+    .stroke({ width: 8, color: 0x1c7fae, alpha: 0.35, join: 'round', cap: 'round' });
+  const ringWhite = new Graphics()
+    .poly(wobble(tubRingPoints(18), 1.8))
+    .stroke({ width: 12, color: 0xffffff, join: 'round', cap: 'round' });
+  app.stage.addChild(ringShadow, ringWhite);
 
   // rim band: navy outline sandwich, near-white band, cool shadow along the
   // inner edge — colours matched to the gameplay reference
