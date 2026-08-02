@@ -13,10 +13,7 @@ const OUT = 'src/assets';
 /** Copied byte-for-byte (skeletons, atlases, audio). */
 const COPY = [
   'entities/ducky/ducky.skel', 'entities/ducky/ducky.atlas',
-  'entities/barrel/barrel.json', 'entities/barrel/barrel.atlas',
   'entities/crate-round/crate-round.skel', 'entities/crate-round/crate-round.atlas',
-  'entities/firework-base/firework-base.skel', 'entities/firework-base/firework-base.atlas',
-  'entities/firework-rocket/firework-rocket.skel', 'entities/firework-rocket/firework-rocket.atlas',
   'entities/tutorial-hand/tutorial-hand.json', 'entities/tutorial-hand/tutorial-hand.atlas',
   'sfx/clips/launch-pull.mp3', 'sfx/clips/launch-release.mp3',
   'sfx/clips/duck-bump.mp3', 'sfx/clips/duck-explode.mp3',
@@ -29,10 +26,7 @@ const COPY = [
 /** PNG -> WebP, same dimensions (never resized). q: quality. */
 const WEBP = [
   { src: 'entities/ducky/ducky.png', q: 82 },                       // atlas page — quality generous, it's the hero
-  { src: 'entities/barrel/barrel.png', q: 80 },                     // atlas page
   { src: 'entities/crate-round/crate-round.png', q: 80 },           // atlas page — THE barrel (game's ribbon-strip mechanic)
-  { src: 'entities/firework-base/firework-base.png', q: 80 },       // atlas page
-  { src: 'entities/firework-rocket/firework-rocket.png', q: 80 },   // atlas page
   { src: 'entities/tutorial-hand/tutorial-hand.png', q: 80 },       // atlas page
   { src: 'theme/in-game-bg.png', q: 60 },                           // full-screen bg, flat art survives low q
   { src: 'icons/goal-Barrel.png', q: 75 },
@@ -52,10 +46,6 @@ const WEBP = [
   { src: 'vfx/aim/aim-fire-arrow.png', q: 85 },
   { src: 'vfx/aim/aim-touch-bg.png', q: 85 },
   { src: 'vfx/aim/aim-touch-front.png', q: 85 },
-  { src: 'entities/wall-bouncers/BouncyWall-wall-horizontal.png', q: 80 },
-  { src: 'entities/wall-bouncers/BouncyWall-wall-vertical.png', q: 80 },
-  { src: 'entities/wall-bouncers/BouncyWall-triangle-top.png', q: 80 },
-  { src: 'entities/wall-bouncers/BouncyWall-triangle-bottom.png', q: 80 },
 ];
 
 /**
@@ -100,11 +90,6 @@ const OUTLINE = [
     src: 'entities/wall-bouncers/BouncyWall-small-tip-side.png',
     out: 'entities/wall-bouncers/BouncyWall-small-tip-side-outlined.webp',
     grow: 8, q: 82,
-  },
-  {
-    src: 'entities/wall-bouncers/BouncyWall-top.png',
-    out: 'entities/wall-bouncers/BouncyWall-top-outlined.webp',
-    grow: 20, q: 82,
   },
 ];
 
