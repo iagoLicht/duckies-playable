@@ -67,9 +67,14 @@ function playOnce(seed: number): RunStats {
 }
 
 describe('level playthrough statistics', () => {
-  it('600 bot runs: everyone wins, pacing lands near 40s, finale fires', () => {
+  it('600 bot runs: everyone wins, pacing lands near 40s, finale fires', async () => {
     const runs: RunStats[] = [];
-    for (let seed = 1; seed <= 600; seed++) runs.push(playOnce(seed));
+    for (let seed = 1; seed <= 600; seed++) {
+      runs.push(playOnce(seed));
+      // ~2min of synchronous CPU starves the worker's event loop and the reporter
+      // RPC ("onTaskUpdate") times out. Yielding periodically keeps it alive.
+      if (seed % 25 === 0) await new Promise((r) => setImmediate(r));
+    }
 
     const winRate = runs.filter((r) => r.won).length / runs.length;
     const times = runs.map((r) => r.seconds).sort((a, b) => a - b);
@@ -87,5 +92,8 @@ describe('level playthrough statistics', () => {
     expect(p90).toBeLessThan(80);
     expect(finaleRate).toBeGreaterThan(0.85);
     expect(avgBlasts).toBeGreaterThan(4);
-  }, 120_000);
+    // 600 runs is ~2min of CPU here. The old 120s budget never fired while the loop
+    // blocked the event loop; now that it yields, the timer works — so give it real
+    // headroom. This bounds a hang, it does not assert performance.
+  }, 600_000);
 });

@@ -1423,9 +1423,14 @@ function playOnce(seed: number): RunStats {
 }
 
 describe('level playthrough statistics', () => {
-  it('600 bot runs: everyone wins, pacing lands near 40s, finale fires', () => {
+  it('600 bot runs: everyone wins, pacing lands near 40s, finale fires', async () => {
     const runs: RunStats[] = [];
-    for (let seed = 1; seed <= 600; seed++) runs.push(playOnce(seed));
+    for (let seed = 1; seed <= 600; seed++) {
+      runs.push(playOnce(seed));
+      // ~2min of synchronous CPU starves the worker's event loop and the reporter
+      // RPC ("onTaskUpdate") times out. Yielding periodically keeps it alive.
+      if (seed % 25 === 0) await new Promise((r) => setImmediate(r));
+    }
 
     const winRate = runs.filter((r) => r.won).length / runs.length;
     const times = runs.map((r) => r.seconds).sort((a, b) => a - b);
@@ -1443,7 +1448,10 @@ describe('level playthrough statistics', () => {
     expect(p90).toBeLessThan(80);
     expect(finaleRate).toBeGreaterThan(0.85);
     expect(avgBlasts).toBeGreaterThan(4);
-  }, 120_000);
+    // 600 runs is ~2min of CPU here. The old 120s budget never fired while the loop
+    // blocked the event loop; now that it yields, the timer works — so give it real
+    // headroom. This bounds a hang, it does not assert performance.
+  }, 600_000);
 });
 ```
 
@@ -1464,6 +1472,7 @@ The console.log line stays in — its numbers go into the final writeup.
 - **`avgBlasts` was structurally 0, not a balance miss.** With four *distinct* duck colours, no same-colour pair can exist; ducks are only removed by popping, and `handleRespawns` only fires below `targetDucks` (4) — so the pop → blast → chain path was unreachable in real play and only unit tests exercised it. Fixed by making the fourth duck green (user-approved, see Locked design inputs).
 - **Damage arithmetic:** 13 barrels × 2–3 hp = 27 damage points. At ~1 damage per direct hit and the bot's 2.05 s average cadence, a *perfect* run floors at ~54.5 s — so `p50 < 55` is unreachable without blasts contributing multi-barrel damage.
 - **Final config:** `FRICTION 1.4 → 0.6`, `BARREL_HIT_SPEED 150 → 90`, fourth duck purple → green. Result at 600 seeds: `winRate 1, p50 51.5, p90 67.6, finaleRate 0.99, avgBlasts 9.9` (93 s runtime). The Task 3 barrel-impact test window shrank 90 → 30 steps because the lower damping lets the duck rebound off the wall for a second hit inside 1.5 s.
+- **Reporter deadlock (fixed in Task 9).** The 600-seed loop ran as one unbroken block of synchronous CPU, so the vitest worker never serviced its event loop and the reporter's `onTaskUpdate` RPC timed out — the suite printed 32/32 green but `npm test` still exited 1. Fixed by making the test `async` and awaiting a `setImmediate` every 25 seeds. That yield also lets the per-test timeout timer actually fire for the first time, which exposed that the real runtime (~121–127 s here, vs. the 93 s measured during tuning) exceeds the original `120_000` budget, so it was raised to `600_000`. No assertion, bot, or sim constant changed.
 
 - [ ] **Step 7.3: Commit**
 
