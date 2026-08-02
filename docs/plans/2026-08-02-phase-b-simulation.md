@@ -15,7 +15,7 @@
 - NO fireworks (cut by user decision 2026-08-02).
 - Whiffs (release with tiny pull) fire nothing and cost nothing.
 - No visible timer; target level length ≈ 40 s; win-only; ending = "barely win with the final duck".
-- Scene layout (locked, from `src/main.ts`): ducks green(175,360) red(455,345) yellow(285,485) purple(550,470); colour barrels yellow(250,800) red(470,800); wood barrels ×4 at (120/285/450/615, 1090); triangle bumpers on walls at y=950 (flat edge at x=50 / x=670); tub interior boundary = `traceTub` shape.
+- Scene layout (locked, from `src/main.ts`): ducks green(175,360) red(455,345) yellow(285,485) green(550,470) (purple duck changed to green 2026-08-02, user-approved: 4 distinct colours made the chain mechanic unreachable); colour barrels yellow(250,800) red(470,800); wood barrels ×4 at (120/285/450/615, 1090); triangle bumpers on walls at y=950 (flat edge at x=50 / x=670); tub interior boundary = `traceTub` shape.
 - THE barrel rig is `entities/crate-round` (skins wood/yellow/purple/red; anims `hp5..hp0` = clasp-strip set-poses, `hit` = 1.03 s wobble).
 
 ---
@@ -121,7 +121,7 @@ export const SIM = {
   DUCK_R: 46,
   BARREL_R: 60,
 
-  FRICTION: 1.4,        // exponential damping per second while live
+  FRICTION: 0.6,        // exponential damping per second while live
   STOP_SPEED: 30,       // below this a live duck comes to rest
   RESTITUTION_WALL: 0.82,
   RESTITUTION_BODY: 0.95,
@@ -132,7 +132,7 @@ export const SIM = {
   LAUNCH_K: 7.0,        // launch speed = pull-length * LAUNCH_K
 
   POP_SPEED: 120,       // min relative speed for a same-colour pair pop
-  BARREL_HIT_SPEED: 150, // min impact speed for a direct hit to damage a barrel
+  BARREL_HIT_SPEED: 90, // min impact speed for a direct hit to damage a barrel
   BLAST_R: 140,
   CHAIN_DELAY: 0.08,    // seconds between chain hops (readability)
 
@@ -146,7 +146,7 @@ export const LEVEL = {
     { colour: 'green', x: 175, y: 360 },
     { colour: 'red', x: 455, y: 345 },
     { colour: 'yellow', x: 285, y: 485 },
-    { colour: 'purple', x: 550, y: 470 },
+    { colour: 'green', x: 550, y: 470 },
   ],
   WAVES: [
     {
@@ -526,8 +526,11 @@ describe('World motion', () => {
     const barrel = w.spawnBarrel('wood', 500, 700, 2);
     const d = w.spawnDuck('red', 300, 700);
     w.launch(d.id, 1000, 0);
-    for (let i = 0; i < 90; i++) w.step(SIM.DT);
+    // window ends after the rebound but before the duck can return off the wall
+    // for a second contact (FRICTION 0.6 keeps it live far longer than 1.5 s)
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
     expect(barrel.hp).toBe(1);
+    expect(d.vx).toBeLessThan(0); // bounced back
     expect(d.x).toBeLessThan(500 - 46); // did not tunnel through
     const evs = w.events.filter((e) => e.type === 'barrelDamaged');
     expect(evs).toHaveLength(1);
@@ -1454,6 +1457,13 @@ This is the balancing step. Expected first-run outcome: it may fail on pacing. T
 3. `winRate` < 1 → inspect a failing seed: `playOnce(seed)` with logs; usually the bot ran out of time (raise assist) — the safety respawn already prevents true softlocks.
 
 The console.log line stays in — its numbers go into the final writeup.
+
+**Tuning outcome (recorded 2026-08-02):** first run was `winRate 1.0, p50 67.6, p90 83.1, finaleRate 1.0, avgBlasts 0.0`.
+
+- **Rule 1 above measured backwards.** Raising wave assist made runs *slower* (+0.1 assist → p50 70.2; +0.2 → 69.3), because a high-assist shot drives straight into one barrel and stops, while a sloppier shot ricochets into extra barrels. `LAUNCH_K 7.5` was inert (launch speed is already 7–10× `BARREL_HIT_SPEED`). The pacing lever that actually worked was `FRICTION`.
+- **`avgBlasts` was structurally 0, not a balance miss.** With four *distinct* duck colours, no same-colour pair can exist; ducks are only removed by popping, and `handleRespawns` only fires below `targetDucks` (4) — so the pop → blast → chain path was unreachable in real play and only unit tests exercised it. Fixed by making the fourth duck green (user-approved, see Locked design inputs).
+- **Damage arithmetic:** 13 barrels × 2–3 hp = 27 damage points. At ~1 damage per direct hit and the bot's 2.05 s average cadence, a *perfect* run floors at ~54.5 s — so `p50 < 55` is unreachable without blasts contributing multi-barrel damage.
+- **Final config:** `FRICTION 1.4 → 0.6`, `BARREL_HIT_SPEED 150 → 90`, fourth duck purple → green. Result at 600 seeds: `winRate 1, p50 51.5, p90 67.6, finaleRate 0.99, avgBlasts 9.9` (93 s runtime). The Task 3 barrel-impact test window shrank 90 → 30 steps because the lower damping lets the duck rebound off the wall for a second hit inside 1.5 s.
 
 - [ ] **Step 7.3: Commit**
 

@@ -40,8 +40,11 @@ describe('World motion', () => {
     const barrel = w.spawnBarrel('wood', 500, 700, 2);
     const d = w.spawnDuck('red', 300, 700);
     w.launch(d.id, 1000, 0);
-    for (let i = 0; i < 90; i++) w.step(SIM.DT);
+    // window ends after the rebound but before the duck can return off the wall
+    // for a second contact (FRICTION 0.6 keeps it live far longer than 1.5 s)
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
     expect(barrel.hp).toBe(1);
+    expect(d.vx).toBeLessThan(0); // bounced back
     expect(d.x).toBeLessThan(500 - 46); // did not tunnel through
     const evs = w.events.filter((e) => e.type === 'barrelDamaged');
     expect(evs).toHaveLength(1);

@@ -6,7 +6,7 @@ export const SIM = {
   DUCK_R: 46,
   BARREL_R: 60,
 
-  FRICTION: 1.4,        // exponential damping per second while live
+  FRICTION: 0.6,        // exponential damping per second while live
   STOP_SPEED: 30,       // below this a live duck comes to rest
   RESTITUTION_WALL: 0.82,
   RESTITUTION_BODY: 0.95,
@@ -17,7 +17,7 @@ export const SIM = {
   LAUNCH_K: 7.0,        // launch speed = pull-length * LAUNCH_K
 
   POP_SPEED: 120,       // min relative speed for a same-colour pair pop
-  BARREL_HIT_SPEED: 150, // min impact speed for a direct hit to damage a barrel
+  BARREL_HIT_SPEED: 90, // min impact speed for a direct hit to damage a barrel
   BLAST_R: 140,
   CHAIN_DELAY: 0.08,    // seconds between chain hops (readability)
 
@@ -31,7 +31,7 @@ export const LEVEL = {
     { colour: 'green', x: 175, y: 360 },
     { colour: 'red', x: 455, y: 345 },
     { colour: 'yellow', x: 285, y: 485 },
-    { colour: 'purple', x: 550, y: 470 },
+    { colour: 'green', x: 550, y: 470 },
   ],
   WAVES: [
     {
