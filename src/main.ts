@@ -157,18 +157,24 @@ async function boot(): Promise<void> {
     return pts.map((p) => {
       dist += Math.hypot(p.x - prev.x, p.y - prev.y);
       prev = p;
-      const n = amp * (Math.sin(dist * 0.045) * 0.9 + Math.sin(dist * 0.11 + 2.1) * 0.6 + Math.sin(dist * 0.021 + 0.7) * 0.5);
+      // gentle large-scale undulation (wavelengths ~200-1200px) — the entity
+      // bases have smooth blobby edges, not high-frequency wiggle
+      const n = amp * (Math.sin(dist * 0.012) * 0.8 + Math.sin(dist * 0.031 + 2.1) * 0.5 + Math.sin(dist * 0.0052 + 0.7) * 0.6);
       const dx = cx - p.x, dy = cy - p.y;
       const len = Math.hypot(dx, dy) || 1;
       return { x: p.x + (dx / len) * n, y: p.y + (dy / len) * n };
     });
   };
-  const ringShadow = new Graphics()
-    .poly(wobble(tubRingPoints(26), 2.0).map((p) => ({ x: p.x, y: p.y + 2 })))
-    .stroke({ width: 8, color: 0x1c7fae, alpha: 0.35, join: 'round', cap: 'round' });
+  // soft feathered shadow (like the blurred shadow pieces in the entity sheets):
+  // faked with concentric strokes at falling widths / rising alpha
+  const shadowPts = wobble(tubRingPoints(26), 2.6).map((p) => ({ x: p.x, y: p.y + 3 }));
+  const ringShadow = new Graphics();
+  for (const [w, a] of [[14, 0.07], [10, 0.1], [6, 0.14]] as const) {
+    ringShadow.poly(shadowPts).stroke({ width: w, color: 0x2a6d92, alpha: a, join: 'round', cap: 'round' });
+  }
   const ringWhite = new Graphics()
-    .poly(wobble(tubRingPoints(18), 1.8))
-    .stroke({ width: 12, color: 0xffffff, join: 'round', cap: 'round' });
+    .poly(wobble(tubRingPoints(18), 2.6))
+    .stroke({ width: 13, color: 0xffffff, join: 'round', cap: 'round' });
   app.stage.addChild(ringShadow, ringWhite);
 
   // rim band: navy outline sandwich, near-white band, cool shadow along the
