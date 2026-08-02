@@ -149,7 +149,9 @@ async function boot(): Promise<void> {
     arc(l + s + rc, t + rc, rc, 2 * H, 3 * H);
     return pts;
   };
-  const wobble = (pts: Array<{ x: number; y: number }>, amp: number): Array<{ x: number; y: number }> => {
+  const wobble = (
+    pts: Array<{ x: number; y: number }>, amp: number, maxIn = Infinity,
+  ): Array<{ x: number; y: number }> => {
     // deterministic smooth noise along the perimeter, pushed toward the tub centre
     const cx = (tub.l + tub.r) / 2, cy = (tub.t + tub.b) / 2;
     let dist = 0;
@@ -159,7 +161,12 @@ async function boot(): Promise<void> {
       prev = p;
       // gentle large-scale undulation (wavelengths ~200-1200px) — the entity
       // bases have smooth blobby edges, not high-frequency wiggle
-      const n = amp * (Math.sin(dist * 0.012) * 0.8 + Math.sin(dist * 0.031 + 2.1) * 0.5 + Math.sin(dist * 0.0052 + 0.7) * 0.6);
+      // clamp the inward push (positive n) so the ring's outer edge never pulls
+      // away from the frame — outward push just tucks further under it
+      const n = Math.min(
+        maxIn,
+        amp * (Math.sin(dist * 0.012) * 0.8 + Math.sin(dist * 0.031 + 2.1) * 0.5 + Math.sin(dist * 0.0052 + 0.7) * 0.6),
+      );
       const dx = cx - p.x, dy = cy - p.y;
       const len = Math.hypot(dx, dy) || 1;
       return { x: p.x + (dx / len) * n, y: p.y + (dy / len) * n };
@@ -167,15 +174,35 @@ async function boot(): Promise<void> {
   };
   // soft feathered shadow (like the blurred shadow pieces in the entity sheets):
   // faked with concentric strokes at falling widths / rising alpha
-  const shadowPts = wobble(tubRingPoints(26), 2.6).map((p) => ({ x: p.x, y: p.y + 3 }));
+  const shadowPts = wobble(tubRingPoints(24), 2.6).map((p) => ({ x: p.x, y: p.y + 3 }));
   const ringShadow = new Graphics();
   for (const [w, a] of [[14, 0.07], [10, 0.1], [6, 0.14]] as const) {
     ringShadow.poly(shadowPts).stroke({ width: w, color: 0x2a6d92, alpha: a, join: 'round', cap: 'round' });
   }
+  // centerline 17.5, width 9: outer edge spans 8..15 — always at or under the
+  // frame's inner edge (15), so the line sits stuck to the border everywhere
   const ringWhite = new Graphics()
-    .poly(wobble(tubRingPoints(18), 2.6))
-    .stroke({ width: 13, color: 0xffffff, join: 'round', cap: 'round' });
-  app.stage.addChild(ringShadow, ringWhite);
+    .poly(wobble(tubRingPoints(17.5), 2.6, 2.0))
+    .stroke({ width: 9, color: 0xffffff, join: 'round', cap: 'round' });
+
+  // triangle bumpers load before the ring is layered: they sit BETWEEN the ring
+  // shadow and the ring white line, so the white line paints over the seam and
+  // flows continuously into the bumper's baked outline
+  const loadTex = async (url: string): Promise<Texture> => {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return Texture.from(img);
+  };
+  const tipTex = await loadTex(tipSideUrl);
+  const triLeft = new Sprite(tipTex);
+  triLeft.anchor.set(125 / 164, 0.5);
+  triLeft.scale.set(-1, 1); // art points left; mirror so the tip points into the field
+  triLeft.position.set(tub.l + 24, 950);
+  const triRight = new Sprite(tipTex);
+  triRight.anchor.set(125 / 164, 0.5);
+  triRight.position.set(DESIGN_W - (tub.l + 24), 950);
+  app.stage.addChild(ringShadow, triLeft, triRight, ringWhite);
 
   // rim band: navy outline sandwich, near-white band, cool shadow along the
   // inner edge — colours matched to the gameplay reference
@@ -185,32 +212,14 @@ async function boot(): Promise<void> {
   traceTub(tubFrame, -2).stroke({ width: 17, color: 0xe4eef1 });
   app.stage.addChild(tubFrame);
 
-  // wall bouncers — pink jelly deflectors mounted flush on the tub's inner wall
-  // (flat edge against the border, slope facing the water), like the real game
-  const loadTex = async (url: string): Promise<Texture> => {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    return Texture.from(img);
-  };
-  // Small-tip triangle (per the gameplay reference): flat edge sits ON the white
-  // inner ring, tip pointing into the water; the baked white outline merges with
-  // the ring. Anchor is at the art's flat edge (opaque right edge 125px of 164).
-  const tipTex = await loadTex(tipSideUrl);
-  const triLeft = new Sprite(tipTex);
-  triLeft.anchor.set(125 / 164, 0.5);
-  triLeft.scale.set(-1, 1); // art points left; mirror so the tip points into the field
-  triLeft.position.set(tub.l + 24, 950);
-  const triRight = new Sprite(tipTex);
-  triRight.anchor.set(125 / 164, 0.5);
-  triRight.position.set(DESIGN_W - (tub.l + 24), 950);
   // bar bumper sleeves the border itself (per the reference): centered on the
-  // top band, sticking out evenly on both sides
+  // top band, sticking out evenly on both sides — above the frame, unlike the
+  // triangles which merge with the inner ring
   const bar = new Sprite(await loadTex(barTopUrl));
   bar.anchor.set(0.5);
   bar.scale.set(0.4);
   bar.position.set(480, tub.t);
-  app.stage.addChild(triLeft, triRight, bar);
+  app.stage.addChild(bar);
 
   const spines: Spine[] = [];
   const add = (s: Spine, x: number, y: number, scale: number): Spine => {
