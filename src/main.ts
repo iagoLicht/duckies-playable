@@ -201,21 +201,21 @@ async function boot(): Promise<void> {
   // layer at the front-wall top edge — bodies and bases never show.
   const rocketLayer = new Container();
   const rocketClip = new Graphics()
-    .rect(crate.x - 0.34 * crate.w, crate.y - crate.w, 0.68 * crate.w, crate.w + 0.05 * crate.w)
+    .rect(crate.x - 0.44 * crate.w, crate.y - crate.w, 0.88 * crate.w, crate.w + 0.05 * crate.w)
     .fill(0xffffff);
   rocketLayer.mask = rocketClip;
-  // dense three-tier cluster per the reference photo: back row tallest with tips
-  // above the top rail, middle pair filling the gaps, low outer pair leaning over
-  // the posts; heads overlap and fill the opening post-to-post. x/y are fractions
-  // of crate width; draw order back-to-front so nearer heads overlap farther ones
+  // arrangement measured from the official trailer (1080p frames): four back
+  // columns in a zigzag — tall tips a full head above the rail, mid tips at rail
+  // level — plus two low heads nestled in the foam up front. Outer columns
+  // overlap the posts like the real game. x/y are fractions of crate width;
+  // draw order: tall columns first, then mids, then the front pair
   const stock = [
-    { skin: 'purple', x: -0.26, y: -0.18, s: 1.05, a: -6 },
-    { skin: 'yellow', x: 0.0, y: -0.19, s: 1.05, a: 0 },
-    { skin: 'purple', x: 0.26, y: -0.18, s: 1.05, a: 6 },
-    { skin: 'red', x: -0.13, y: -0.05, s: 0.98, a: -3 },
-    { skin: 'green', x: 0.13, y: -0.05, s: 0.98, a: 3 },
-    { skin: 'yellow', x: -0.29, y: 0.06, s: 0.9, a: -10 },
-    { skin: 'red', x: 0.29, y: 0.06, s: 0.9, a: 10 },
+    { skin: 'purple', x: -0.1, y: -0.18, s: 1.02, a: -2 },
+    { skin: 'purple', x: 0.31, y: -0.18, s: 1.02, a: 4 },
+    { skin: 'yellow', x: -0.3, y: -0.055, s: 0.98, a: -4 },
+    { skin: 'yellow', x: 0.11, y: -0.055, s: 0.98, a: 2 },
+    { skin: 'red', x: -0.19, y: 0.05, s: 0.9, a: -3 },
+    { skin: 'green', x: 0.03, y: 0.05, s: 0.9, a: 3 },
   ] as const;
   for (const { skin, x, y, s, a } of stock) {
     const r = makeSpine(rocketData);
