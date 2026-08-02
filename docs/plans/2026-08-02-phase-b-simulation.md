@@ -515,9 +515,10 @@ describe('World motion', () => {
     const a = w.spawnDuck('red', 300, 700);
     const b = w.spawnDuck('green', 460, 700);
     w.launch(a.id, 900, 0);
-    for (let i = 0; i < 90; i++) w.step(SIM.DT);
+    let transferred = false;
+    for (let i = 0; i < 90; i++) { w.step(SIM.DT); if (b.vx > 0) transferred = true; }
     expect(w.ducks).toHaveLength(2);
-    expect(b.vx).toBeGreaterThan(0); // momentum transferred
+    expect(transferred).toBe(true); // momentum transferred
   });
 
   it('duck hitting a barrel bounces back and damages it', () => {
@@ -542,6 +543,8 @@ describe('World motion', () => {
   });
 });
 ```
+
+(Momentum is sampled over the window: duck B round-trips off the right wall and returns with negative vx by frame 90 — asserting `b.vx > 0` at the end is unsatisfiable.)
 
 Run: `npx vitest run tests/sim/world.test.ts` — Expected: FAIL.
 
