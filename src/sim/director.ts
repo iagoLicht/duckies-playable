@@ -33,6 +33,9 @@ export class Director {
       this.world.spawnDuck(d.colour as Colour, d.x, d.y);
     }
     this.startWave(1);
+    // present one consistent stream: the init spawns/waveStarted land in
+    // `drained` alongside the counter instead of leaking into the first step()
+    this.drained.push(...this.world.events.splice(0, this.world.events.length));
     this.pushCounter();
   }
 
@@ -55,13 +58,13 @@ export class Director {
 
     // drain world events, reacting to the ones the director cares about
     const evs = this.world.events.splice(0, this.world.events.length);
+    this.drained.push(...evs); // causes first, then the reactions below
     for (const e of evs) {
       if (e.type === 'barrelDestroyed') {
         this.destroyed++;
         this.pushLocal({ type: 'counter', done: this.destroyed, total: LEVEL.TOTAL_BARRELS });
       }
     }
-    this.drained.push(...evs);
 
     if (!this.won && this.destroyed >= LEVEL.TOTAL_BARRELS) {
       this.won = true;

@@ -25,6 +25,38 @@ export const SIM = {
   ASSIST_CONE_DEG: 28,
 } as const;
 
+const WAVES = [
+  {
+    assist: 0.35,
+    targetDucks: 4,
+    barrels: [
+      { skin: 'yellow', x: 250, y: 800, hp: 2 },
+      { skin: 'red', x: 470, y: 800, hp: 2 },
+      { skin: 'wood', x: 120, y: 1090, hp: 2 },
+      { skin: 'wood', x: 285, y: 1090, hp: 2 },
+      { skin: 'wood', x: 450, y: 1090, hp: 2 },
+      { skin: 'wood', x: 615, y: 1090, hp: 2 },
+    ],
+  },
+  {
+    assist: 0.55,
+    targetDucks: 4,
+    barrels: [
+      { skin: 'purple', x: 250, y: 620, hp: 2 },
+      { skin: 'red', x: 470, y: 620, hp: 2 },
+      { skin: 'wood', x: 120, y: 640, hp: 2 },
+      { skin: 'wood', x: 615, y: 640, hp: 2 },
+      { skin: 'wood', x: 250, y: 1090, hp: 2 },
+      { skin: 'wood', x: 470, y: 1090, hp: 2 },
+    ],
+  },
+  {
+    assist: 0.85,
+    targetDucks: 2,
+    barrels: [{ skin: 'yellow', x: 360, y: 700, hp: 3, golden: true }],
+  },
+] as const;
+
 /** Level data — mirrors the locked visual layout for wave 1. */
 export const LEVEL = {
   DUCKS: [
@@ -33,38 +65,9 @@ export const LEVEL = {
     { colour: 'yellow', x: 285, y: 485 },
     { colour: 'green', x: 550, y: 470 },
   ],
-  WAVES: [
-    {
-      assist: 0.35,
-      targetDucks: 4,
-      barrels: [
-        { skin: 'yellow', x: 250, y: 800, hp: 2 },
-        { skin: 'red', x: 470, y: 800, hp: 2 },
-        { skin: 'wood', x: 120, y: 1090, hp: 2 },
-        { skin: 'wood', x: 285, y: 1090, hp: 2 },
-        { skin: 'wood', x: 450, y: 1090, hp: 2 },
-        { skin: 'wood', x: 615, y: 1090, hp: 2 },
-      ],
-    },
-    {
-      assist: 0.55,
-      targetDucks: 4,
-      barrels: [
-        { skin: 'purple', x: 250, y: 620, hp: 2 },
-        { skin: 'red', x: 470, y: 620, hp: 2 },
-        { skin: 'wood', x: 120, y: 640, hp: 2 },
-        { skin: 'wood', x: 615, y: 640, hp: 2 },
-        { skin: 'wood', x: 250, y: 1090, hp: 2 },
-        { skin: 'wood', x: 470, y: 1090, hp: 2 },
-      ],
-    },
-    {
-      assist: 0.85,
-      targetDucks: 2,
-      barrels: [{ skin: 'yellow', x: 360, y: 700, hp: 3, golden: true }],
-    },
-  ],
-  TOTAL_BARRELS: 13,
+  WAVES,
+  /** derived: every barrel across every wave */
+  TOTAL_BARRELS: WAVES.reduce((n, w) => n + w.barrels.length, 0) as number,
   ASSIST_FINALE: 0.95,
   DUCK_SPAWN_REGION: { x0: 110, y0: 300, x1: 610, y1: 560 },
 } as const;

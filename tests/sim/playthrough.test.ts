@@ -73,7 +73,7 @@ describe('level playthrough statistics', () => {
       runs.push(playOnce(seed));
       // ~2min of synchronous CPU starves the worker's event loop and the reporter
       // RPC ("onTaskUpdate") times out. Yielding periodically keeps it alive.
-      if (seed % 25 === 0) await new Promise((r) => setImmediate(r));
+      if (seed % 25 === 0) await new Promise((r) => setTimeout(r, 0));
     }
 
     const winRate = runs.filter((r) => r.won).length / runs.length;

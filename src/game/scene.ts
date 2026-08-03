@@ -35,6 +35,8 @@ export class GameScene {
   private duckyData!: SkeletonData;
   private crateData!: SkeletonData;
   private accumulator = 0;
+  /** pointerId that owns the current grab — other pointers are ignored */
+  private activePointer: number | null = null;
 
   constructor(private app: Application, seed: number) {
     this.director = new Director(seed);
@@ -71,21 +73,31 @@ export class GameScene {
     stage.eventMode = 'static';
     stage.hitArea = { contains: () => true };
     stage.on('pointerdown', (e) => {
+      if (this.activePointer !== null) return; // a grab is in flight — ignore extra fingers
       const p = e.getLocalPosition(stage);
-      if (this.director.slingshot.begin(p.x, p.y) && this.hand) {
-        this.hand.visible = false; // tutorial done
-      }
+      if (!this.director.slingshot.begin(p.x, p.y)) return;
+      this.activePointer = e.pointerId;
+      if (this.hand) this.hand.visible = false; // tutorial done
     });
     stage.on('pointermove', (e) => {
+      if (e.pointerId !== this.activePointer) return;
       const p = e.getLocalPosition(stage);
       this.director.slingshot.move(p.x, p.y);
     });
-    const up = (): void => {
+    const up = (e: { pointerId: number }): void => {
+      if (e.pointerId !== this.activePointer) return;
+      this.activePointer = null;
       this.director.slingshot.end();
       this.aimLine.clear();
     };
     stage.on('pointerup', up);
     stage.on('pointerupoutside', up);
+    stage.on('pointercancel', (e) => {
+      if (e.pointerId !== this.activePointer) return;
+      this.activePointer = null;
+      this.director.slingshot.cancel(); // cancelled: drop the grab without firing
+      this.aimLine.clear();
+    });
   }
 
   private tick(dt: number): void {
@@ -221,7 +233,7 @@ export class GameScene {
   private drawAim(): void {
     this.aimLine.clear();
     const p = this.director.slingshot.pull;
-    if (!p || p.len < 10) return;
+    if (!p || p.len < SIM.MIN_PULL) return;
     // simple dotted line opposite the pull (placeholder for Phase C aim vfx)
     const len = Math.min(p.len, SIM.MAX_PULL);
     const ux = p.dx / (p.len || 1), uy = p.dy / (p.len || 1);

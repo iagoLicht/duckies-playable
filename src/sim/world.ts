@@ -133,7 +133,9 @@ export class World {
 
   private collideDuckBarrels(): void {
     for (const d of this.ducks) {
-      for (const b of this.barrels) {
+      // snapshot: damageBarrel splices destroyed barrels out mid-iteration
+      for (const b of [...this.barrels]) {
+        if (b.hp <= 0) continue; // already destroyed this substep
         const dx = d.x - b.x, dy = d.y - b.y;
         const dist = Math.hypot(dx, dy);
         const minD = SIM.DUCK_R + SIM.BARREL_R;

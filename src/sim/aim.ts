@@ -11,6 +11,10 @@ export class Slingshot {
   /** 0..1 — director raises this over the level */
   assist = 0.35;
   private duck: Duck | null = null;
+  /** pointer-down position — the pull is anchored here, not at the duck centre,
+   *  so an off-centre grab followed by an immediate release is a whiff */
+  private gx = 0;
+  private gy = 0;
   private px = 0;
   private py = 0;
 
@@ -23,8 +27,8 @@ export class Slingshot {
   /** Current pull vector for the view (aim UI). Null when not aiming. */
   get pull(): { duck: Duck; dx: number; dy: number; len: number } | null {
     if (!this.duck) return null;
-    const dx = this.duck.x - this.px;
-    const dy = this.duck.y - this.py;
+    const dx = this.gx - this.px;
+    const dy = this.gy - this.py;
     return { duck: this.duck, dx, dy, len: Math.hypot(dx, dy) };
   }
 
@@ -41,6 +45,8 @@ export class Slingshot {
     }
     if (!best) return false;
     this.duck = best;
+    this.gx = x;
+    this.gy = y;
     this.px = x;
     this.py = y;
     return true;

@@ -23,6 +23,17 @@ describe('Slingshot', () => {
     expect(d.live).toBe(false);
   });
 
+  it('off-centre tap with no drag is a whiff (pull anchors at the pointer)', () => {
+    const w = new World(1);
+    const d = w.spawnDuck('red', 300, 700);
+    const s = new Slingshot(w);
+    expect(s.begin(340, 700)).toBe(true); // 40px off-centre, inside GRAB_R
+    expect(s.end()).toBe(false); // released without moving
+    expect(d.live).toBe(false);
+    expect(d.x).toBe(300);
+    expect(d.y).toBe(700);
+  });
+
   it('pull back fires the duck in the opposite direction', () => {
     const w = new World(1);
     const d = w.spawnDuck('red', 300, 700);

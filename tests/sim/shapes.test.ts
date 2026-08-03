@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collideCircle, COLLIDERS } from '../../src/sim/shapes';
+import { collideCircle } from '../../src/sim/shapes';
 
 describe('tub boundary collision', () => {
   it('does nothing for a circle well inside', () => {
