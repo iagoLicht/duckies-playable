@@ -5,9 +5,11 @@ import { mulberry32 } from '../../src/sim/rng';
 
 /**
  * A mediocre-on-purpose bot: every ~2s it grabs a random resting duck and
- * slings it toward the nearest barrel (or a same-colour duck 30% of the time)
- * with +/-10 degrees of aim noise. Aim assist is expected to carry it — the
- * playable must be winnable by a distracted human thumb.
+ * slings it at another duck — mostly a same-colour mate, sometimes any other
+ * duck just to stir the field — with +/-10 degrees of aim noise. Shots must
+ * reach a duck to fire at all now, so noisy aims sometimes whiff outright;
+ * aim assist is expected to carry it — the playable must be winnable by a
+ * distracted human thumb.
  */
 interface RunStats {
   won: boolean;
@@ -39,28 +41,53 @@ function playOnce(seed: number): RunStats {
     if (resting.length === 0) continue;
     const duck = resting[Math.floor(rng() * resting.length)]!;
 
-    // pick a target: nearest barrel, or 30% a same-colour duck when one exists
-    let tx: number, ty: number;
-    const mates = dir.world.ducks.filter((d) => d.id !== duck.id && d.colour === duck.colour);
-    if (mates.length > 0 && rng() < 0.3) {
-      const m = mates[Math.floor(rng() * mates.length)]!;
-      tx = m.x; ty = m.y;
-    } else if (dir.world.barrels.length > 0) {
-      const b = [...dir.world.barrels].sort(
-        (p, q) => Math.hypot(p.x - duck.x, p.y - duck.y) - Math.hypot(q.x - duck.x, q.y - duck.y),
-      )[0]!;
-      tx = b.x; ty = b.y;
-    } else {
-      continue;
-    }
+    // pick a target DUCK (barrel aims are refused). Play the game the way the
+    // white deflection arrow teaches: a dead-on hit sends the STRUCK duck
+    // onward along the line of centres, so favour targets whose deflection
+    // line carries into a surviving barrel (the carom does the crate damage),
+    // and same-colour mates for the match. A dash of preference noise keeps it
+    // a thumb, not a snooker engine.
+    const others = dir.world.ducks.filter((d) => d.id !== duck.id && !d.popping);
+    if (others.length === 0) continue;
+    const caromsIntoBarrel = (t: { x: number; y: number }): boolean => {
+      const ux = t.x - duck.x, uy = t.y - duck.y;
+      const len = Math.hypot(ux, uy) || 1;
+      const dx = ux / len, dy = uy / len;
+      return dir.world.barrels.some((b) => {
+        const bx = b.x - t.x, by = b.y - t.y;
+        const along = bx * dx + by * dy;
+        if (along <= 0 || along > 700) return false;
+        const off = Math.abs(bx * dy - by * dx);
+        return off < SIM.BARREL_R + SIM.DUCK_R * 0.6;
+      });
+    };
+    const scored = others.map((t) => ({
+      t,
+      s: (caromsIntoBarrel(t) ? 3 : 0) + (t.colour === duck.colour ? 2 : 0) + rng() * 1.5,
+    }));
+    scored.sort((a, b) => b.s - a.s);
+    const best = scored[0]!.t;
+    const tx = best.x, ty = best.y;
 
     let ang = Math.atan2(ty - duck.y, tx - duck.x);
     ang += ((rng() - 0.5) * 20 * Math.PI) / 180; // +/-10 deg noise
     const pull = 140 + rng() * 60;
-    const sx = duck.x - Math.cos(ang) * pull;
-    const sy = duck.y - Math.sin(ang) * pull;
     if (dir.slingshot.begin(duck.x, duck.y)) {
-      dir.slingshot.move(sx, sy);
+      const aimAt = (a: number): void =>
+        dir.slingshot.move(duck.x - Math.cos(a) * pull, duck.y - Math.sin(a) * pull);
+      aimAt(ang);
+      // like a player: the release is refused while the X shows, so swing the
+      // aim outward from the intended angle until the guide locks a duck —
+      // all the way around if needed (that's how the bank shots happen)
+      if (dir.slingshot.preview()?.hitKind !== 'duck') {
+        for (let s = 1; s <= 60; s++) {
+          const off = (s * 3 * Math.PI) / 180;
+          aimAt(ang + off);
+          if (dir.slingshot.preview()?.hitKind === 'duck') break;
+          aimAt(ang - off);
+          if (dir.slingshot.preview()?.hitKind === 'duck') break;
+        }
+      }
       dir.slingshot.end();
     }
   }

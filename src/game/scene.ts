@@ -19,6 +19,9 @@ import handAtlasText from '../assets/entities/tutorial-hand/tutorial-hand.atlas?
 import handPageUrl from '../assets/entities/tutorial-hand/tutorial-hand.webp';
 import starUrl from '../assets/vfx/impact-star.webp';
 import blobUrl from '../assets/vfx/explode-particle.webp';
+import aimDotUrl from '../assets/vfx/aim/aim-dot.webp';
+import touchBgUrl from '../assets/vfx/aim/aim-touch-bg.webp';
+import touchFrontUrl from '../assets/vfx/aim/aim-touch-front.webp';
 
 const DUCK_SCALE = 0.9;
 const BARREL_SCALE = 0.85;
@@ -46,6 +49,35 @@ const BURST_TINTS: Record<Colour, number> = (() => {
 const T_BODY = 0;
 const T_RING = 1;
 const T_SPIN = 2;
+/** looping water ripple under every duck, always on (official: track 2) */
+const T_RIPPLE = 3;
+/**
+ * One-shot spawn_enter as a duck's view appears (official: track 22). It MUST
+ * be mixed back out when it finishes: a completed non-looping track keeps
+ * applying its final frame, and this one keys `master` + the `head*` bones —
+ * held, it would outrank and freeze idle, jump, dance and the aim recoil.
+ *
+ * (The rig's `turn` anim — the official's frozen facing track — is deliberately
+ * NOT used. Measured on this rig it rotates 50 bones, but for our plain colour
+ * skins the visible ones are only the ring's: a duck at 0° and at 180° renders
+ * identically, since `turn` mostly drives costume accessories no skin here
+ * wears. Always-on it would also outrank head/body, killing the idle bob, the
+ * match jump, dance, and the ring spin — all cost, no picture.)
+ */
+const T_SPAWN = 22;
+// official spawn stagger: one duck view per 55ms, each entering with a
+// 300ms Back.easeOut scale-up from ~zero plus a small white star splash
+const SPAWN_STAGGER = 0.055;
+const SPAWN_SCALE_TIME = 0.3;
+/** a random settled duck dances every 2.8s (official idle-flavor timer) */
+const DANCE_PERIOD = 2.8;
+
+/** Phaser's Back.easeOut, used by the official spawn pop-in */
+const backOut = (t: number): number => {
+  const s = 1.70158;
+  const u = t - 1;
+  return 1 + (s + 1) * u * u * u + s * u * u;
+};
 /** explode_vfx runs 0.17s — a hair more so its last frame lands before destroy */
 const POP_TIME = 0.2;
 
@@ -66,12 +98,42 @@ const MATCH_BURST = 0.7;
 
 const quadOut = (t: number): number => 1 - (1 - t) * (1 - t);
 
-// aim visuals (official example): dots crawl forward along the projected path
+// aim visuals. Spacing/start/crawl are the official example's (0.4/0.42 ppu,
+// 100 px/s); the dot size is the REAL game's — the reference video shows small
+// ~11px dots of constant size, not the example's shrinking 18px discs.
 const DOT_SPACING = 36;
 const DOT_START = 38;
 const DOT_MAX = 32;
 const DOT_CRAWL = 100; // px/s
-const DEFLECT_LEN = 90;
+const DOT_SIZE = 11;
+// deflection wedge geometry in duck-radii, traced from the reference video
+// (wallBounce-HowToAim.mp4): base centre / control waist / tip along the
+// deflect axis, base half-width, and how far in the concave edges pinch
+const DEFLECT_BASE = 0.85;
+const DEFLECT_WAIST = 1.5;
+const DEFLECT_TIP = 2.3;
+const DEFLECT_BASE_W = 0.6;
+const DEFLECT_PINCH = 0.35;
+// the red contact crescent on the aimed-at duck (reference video): the rig-pack
+// aim-touch pills, white bg + red-tinted front, ~33px along the duck's rim
+const CRESCENT_COLOR = 0xE8354A; // same red as the whiff X
+const CRESCENT_SCALE = 0.55; // 60px-tall pill -> ~33px
+/**
+ * The rig's aim assembly root: rotating it swings the whole sling — teardrop
+ * (tip authored along +x) AND the duck's pull-back recoil (master, authored -x)
+ * — toward the launch direction. The `aim` anim itself is a STRETCH TIMELINE:
+ * t=0 no pull, t=0.33s full pull. We freeze it and scrub trackTime by how far
+ * the player has dragged, which is what the reference footage shows (short pull
+ * = small round ring, long pull = long teardrop + recoiled duck).
+ */
+const AIM_BONE = 'a_target';
+/** drag distance (px) that maps to the aim anim's full stretch */
+const AIM_PULL_FULL = 260;
+/** even the shortest valid pull shows some stretch (reference: s044 small oval) */
+const AIM_PULL_MIN_T = 0.22;
+/** the anim's tail recoils the duck art way off its spot — the reference never
+ *  shows more than a moderate pull-back, so the scrub tops out early */
+const AIM_PULL_MAX_T = 0.65;
 
 /** Decode an image URL (path or data URI) into a Pixi texture — same one code
  *  path for dev URLs and the build's inlined data URIs. */
@@ -82,10 +144,15 @@ async function loadTexture(url: string): Promise<Texture> {
   return Texture.from(img);
 }
 
-/** remaining hp -> crate-round set-pose animation (clasps strip as hp falls) */
-function stageFor(b: { maxHp: number; hp: number }): string {
-  if (b.maxHp >= 3) return b.hp >= 3 ? 'hp5' : b.hp === 2 ? 'hp3' : 'hp1';
-  return b.hp >= 2 ? 'hp3' : 'hp1';
+/**
+ * Remaining hp IS the visible damage stage, and the rig's pose names line up
+ * exactly: hpN shows N-1 metal straps. 3 hp = two straps (hp3), 2 hp = one
+ * strap (hp2), 1 hp = bare planks (hp1). Every hit steps down exactly one
+ * stage. (hp4/hp5 poses — three and four straps — are deliberately unused:
+ * two straps is the deepest stage this game deals.)
+ */
+function stageFor(b: { hp: number }): string {
+  return b.hp >= 3 ? 'hp3' : b.hp === 2 ? 'hp2' : 'hp1';
 }
 
 export class GameScene {
@@ -98,13 +165,28 @@ export class GameScene {
   private hand: Spine | null = null;
   private duckyData!: SkeletonData;
   private crateData!: SkeletonData;
-  /** per-colour "duck + ring bones" skin, built once (see init) */
+  /** per-colour "duck + ring bones + aim bones" skin, built once (see init) */
   private duckSkins = new Map<Colour, Skin>();
-  /** duck ids currently wearing the green selection ring */
-  private ringed = new Set<number>();
+  /** what each duck's ring track is showing: absent = nothing */
+  private ringMode = new Map<number, 'ring' | 'aim'>();
+  /** aim-teardrop rotation (deg, rig space) applied per duck before world transforms */
+  private aimBoneRot = new Map<number, number>();
+  /** pooled trajectory-dot sprites (official aim-dot), laid out each frame */
+  private dotPool: Sprite[] = [];
+  /** the aim UI layer — dots, crescent, X — sits UNDER the ducks like the official */
+  private aimUnder = new Container();
+  /** red contact crescent on the aimed-at duck: white pill under a red-tinted one */
+  private crescent = new Container();
   private starTex!: Texture;
   /** soft white disc standing in for the official's blurred `foam` sprite */
   private blobTex!: Texture;
+  /** sim ducks awaiting their staggered spawn view (official drainSpawnQueue) */
+  private spawnQueue: Duck[] = [];
+  /** seconds until the next queued spawn view may appear */
+  private spawnTimer = 0;
+  /** duck ids still inside the spawn scale-up (scale is theirs until it ends) */
+  private spawning = new Set<number>();
+  private danceTimer = 0;
   /** duck ids currently whited-out by the match blink */
   private flashOn = new Set<number>();
   /** per-duck isolated attachment colours backing the current white band */
@@ -132,20 +214,46 @@ export class GameScene {
     });
     this.starTex = await loadTexture(starUrl);
     this.blobTex = await loadTexture(blobUrl);
-    this.app.stage.addChild(this.layer, this.fx, this.aimLine);
 
-    // The rig's `active-ring` skin ships ZERO attachments — it exists to carry the
-    // ring BONES (active-ring, active-ring-scale, active-ring-scale4, active-ring2).
-    // Without it those bones are inactive and the `active` animation's attachment
-    // timelines silently no-op, so every duck wears colour + ring-bones combined.
+    // aim UI: official aim-dot sprites + the red contact crescent, all layered
+    // UNDER the ducks (the official parks dots/cross at depth 6-8.5, ducks at 10+,
+    // which is why the reference dots vanish cleanly behind the target duck)
+    const aimDotTex = await loadTexture(aimDotUrl);
+    for (let i = 0; i < DOT_MAX; i++) {
+      const d = new Sprite(aimDotTex);
+      d.anchor.set(0.5);
+      d.width = DOT_SIZE;
+      d.height = DOT_SIZE;
+      d.visible = false;
+      this.dotPool.push(d);
+      this.aimUnder.addChild(d);
+    }
+    const cb = new Sprite(await loadTexture(touchBgUrl));
+    cb.anchor.set(0.5);
+    cb.scale.set(CRESCENT_SCALE);
+    const cf = new Sprite(await loadTexture(touchFrontUrl));
+    cf.anchor.set(0.5);
+    cf.scale.set(CRESCENT_SCALE);
+    cf.tint = CRESCENT_COLOR;
+    this.crescent.addChild(cb, cf);
+    this.crescent.visible = false;
+    this.aimUnder.addChild(this.aimLine, this.crescent);
+    this.app.stage.addChild(this.aimUnder, this.layer, this.fx);
+
+    // The rig's `active-ring` and `aim` skins ship ZERO attachments — they exist
+    // to carry BONES (the circular selection ring's, and the drag teardrop's).
+    // Without them those bones are inactive and the `active`/`aim` animations'
+    // attachment timelines silently no-op, so every duck wears all three merged.
     const ringSkin = this.duckyData.findSkin('active-ring');
-    if (!ringSkin) throw new Error('ducky rig is missing the active-ring skin');
+    const aimSkin = this.duckyData.findSkin('aim');
+    if (!ringSkin || !aimSkin) throw new Error('ducky rig is missing the active-ring/aim skin');
     for (const c of COLOURS) {
       const colourSkin = this.duckyData.findSkin(c);
       if (!colourSkin) throw new Error(`ducky rig is missing the ${c} skin`);
       const combined = new Skin(`${c}+ring`);
       combined.addSkin(colourSkin);
       combined.addSkin(ringSkin);
+      combined.addSkin(aimSkin);
       this.duckSkins.set(c, combined);
     }
 
@@ -174,6 +282,13 @@ export class GameScene {
       if (this.activePointer !== null) return; // a grab is in flight — ignore extra fingers
       const p = e.getLocalPosition(stage);
       if (!this.director.slingshot.begin(p.x, p.y)) return;
+      // a duck waiting in the spawn queue has no view yet: refuse the grab
+      // rather than let the player sling an invisible duck
+      const grabbed = this.director.slingshot.pull?.duck.id;
+      if (grabbed === undefined || !this.duckViews.has(grabbed)) {
+        this.director.slingshot.cancel();
+        return;
+      }
       this.activePointer = e.pointerId;
       if (this.hand) this.hand.visible = false; // tutorial done
     });
@@ -185,7 +300,18 @@ export class GameScene {
     const up = (e: { pointerId: number }): void => {
       if (e.pointerId !== this.activePointer) return;
       this.activePointer = null;
-      this.director.slingshot.end();
+      const held = this.director.slingshot.pull?.duck.id ?? null;
+      const fired = this.director.slingshot.end();
+      if (fired && held !== null) {
+        // the rig's own release snap-back on the launched duck
+        const v = this.duckViews.get(held);
+        if (v) {
+          v.state.setAnimation(T_RING, 'aim_release', false);
+          v.state.addEmptyAnimation(T_RING, 0.1, 0);
+          this.ringMode.delete(held);
+          this.aimBoneRot.delete(held);
+        }
+      }
       this.aimLine.clear();
     };
     stage.on('pointerup', up);
@@ -214,12 +340,40 @@ export class GameScene {
       }
     }
     this.drainEvents();
+    this.drainSpawnQueue(dt);
+    this.tickDance(dt);
     // one trajectory probe per frame — the rings and the aim UI both read it
     const pv = this.director.slingshot.preview();
     this.syncViews(dt);
     this.syncRings(pv);
     this.drawAim(pv);
     this.syncShake(dt);
+  }
+
+  /**
+   * Official idle-flavor: every 2.8s, while the board is settled, one random
+   * duck does a little dance. The official gates on its 'aim' state, which it
+   * only re-enters once every body is at rest AND no fuse is burning — so this
+   * checks the same three things (`live` alone is not enough: a duck nudged by
+   * a collision glides with `live` still false). View-only, so the Math.random
+   * here can't perturb the deterministic sim.
+   */
+  private tickDance(dt: number): void {
+    this.danceTimer += dt;
+    if (this.danceTimer < DANCE_PERIOD) return;
+    this.danceTimer = 0;
+    const busy = this.director.world.ducks.some(
+      (k) => k.live || k.matched || k.vx !== 0 || k.vy !== 0,
+    );
+    if (busy) return;
+    const held = this.director.slingshot.pull?.duck.id;
+    const ids = [...this.duckViews.keys()].filter(
+      (id) => id !== held && !this.spawning.has(id),
+    );
+    if (ids.length === 0) return;
+    const v = this.duckViews.get(ids[(Math.random() * ids.length) | 0]!)!;
+    v.state.setAnimation(T_BODY, 'dance', false);
+    v.state.addAnimation(T_BODY, 'idle', true, 0);
   }
 
   /**
@@ -242,32 +396,72 @@ export class GameScene {
   }
 
   /**
-   * Green ring == "you can grab this duck". Per-duck, so resting ducks keep
-   * their rings while another one flies. While aiming the board goes quiet:
-   * every ring hides except the one on the duck the trajectory will hit.
+   * Reference-video ring rules. Board settled + nobody aiming: every grabbable
+   * duck wears the circular green ring. While aiming: everything goes quiet
+   * except the HELD duck, which swaps to the rig's `aim` teardrop, its tip
+   * rotated live toward the launch direction. While anything is still sliding:
+   * no rings at all (they return when the board comes to rest).
    */
   private syncRings(pv: AimPreview | null): void {
     const aiming = this.director.slingshot.aiming;
-    const target = aiming && pv?.hitKind === 'duck' ? pv.hitId : null;
+    const held = aiming ? this.director.slingshot.pull?.duck.id ?? null : null;
+    const anyLive = this.director.world.ducks.some((k) => k.live);
     for (const d of this.director.world.ducks) {
       const v = this.duckViews.get(d.id);
       if (!v) continue;
-      // a matched duck is spoken for: no ring, it can't be grabbed any more
-      this.setRing(d.id, v, aiming ? d.id === target : !d.live && !d.popping && !d.matched);
+      if (d.id === held) {
+        this.setRingMode(d.id, v, 'aim');
+      } else if (!aiming && !anyLive && !d.live && !d.popping && !d.matched) {
+        // a matched duck is spoken for: no ring, it can't be grabbed any more
+        this.setRingMode(d.id, v, 'ring');
+      } else {
+        this.setRingMode(d.id, v, null);
+      }
+    }
+    // steer the sling: rotate the assembly toward the (assist-bent) launch
+    // direction and scrub the stretch by how far the player has pulled
+    if (held !== null) {
+      const hv = this.duckViews.get(held);
+      const pull = this.director.slingshot.pull;
+      if (hv && pull) {
+        if (pv && pv.points.length >= 2) {
+          const a = pv.points[0]!, b = pv.points[1]!;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          if (dx !== 0 || dy !== 0) {
+            // rig space is y-up, stage y-down: negate the screen angle
+            this.aimBoneRot.set(held, (-Math.atan2(dy, dx) * 180) / Math.PI);
+          }
+        }
+        const entry = hv.state.getCurrent(T_RING);
+        if (entry && entry.animation?.name === 'aim') {
+          const t = Math.min(1, pull.len / AIM_PULL_FULL);
+          const stretch = pull.len < SIM.MIN_PULL
+            ? t * AIM_PULL_MIN_T // under the whiff threshold the sling barely wakes
+            : AIM_PULL_MIN_T + t * (AIM_PULL_MAX_T - AIM_PULL_MIN_T);
+          entry.trackTime = stretch * entry.animation.duration;
+        }
+      }
     }
   }
 
-  private setRing(id: number, v: Spine, on: boolean): void {
-    if (this.ringed.has(id) === on) return;
-    if (on) {
-      this.ringed.add(id);
+  private setRingMode(id: number, v: Spine, mode: 'ring' | 'aim' | null): void {
+    const cur = this.ringMode.get(id) ?? null;
+    if (cur === mode) return;
+    if (mode === 'ring') {
       // `active` attaches the ring to its slots and scales it in; it doesn't loop,
       // so the entry holds the last frame and the ring simply stays up
       v.state.setAnimation(T_RING, 'active', false);
+      this.ringMode.set(id, 'ring');
+    } else if (mode === 'aim') {
+      // frozen at t=0 — syncRings scrubs trackTime along the pull each frame
+      const entry = v.state.setAnimation(T_RING, 'aim', false);
+      entry.timeScale = 0;
+      this.ringMode.set(id, 'aim');
     } else {
-      this.ringed.delete(id);
-      // mixing out to empty restores the setup pose — i.e. detaches the ring
+      // mixing out to empty restores the setup pose — i.e. detaches everything
       v.state.setEmptyAnimation(T_RING, 0);
+      this.ringMode.delete(id);
+      this.aimBoneRot.delete(id);
     }
   }
 
@@ -280,7 +474,10 @@ export class GameScene {
   private onEvent(e: SimEvent): void {
     switch (e.type) {
       case 'duckSpawned':
-        this.addDuck(e.duck);
+        // views appear one per 55ms via the spawn queue (official enqueueSpawn);
+        // until then the sim duck exists with no view — every view lookup in
+        // this file already tolerates that
+        this.spawnQueue.push(e.duck);
         break;
       case 'duckMatched': {
         const v = this.duckViews.get(e.id);
@@ -298,7 +495,8 @@ export class GameScene {
         const v = this.duckViews.get(e.id);
         if (v) {
           this.duckViews.delete(e.id);
-          this.ringed.delete(e.id);
+          this.ringMode.delete(e.id);
+          this.aimBoneRot.delete(e.id);
           this.popDuck(v);
         }
         this.flashOn.delete(e.id);
@@ -311,6 +509,10 @@ export class GameScene {
       }
       case 'blast':
         this.flashBlast(e.x, e.y, e.r, e.colour);
+        break;
+      case 'wallHit':
+        if (e.source === 'bumper') this.burst(e.x, e.y, 0xffb459, 0.8);
+        else this.wallFoam(e.x, e.y, e.nx, e.ny);
         break;
       case 'barrelSpawned':
         this.addBarrel(e.barrel);
@@ -329,6 +531,9 @@ export class GameScene {
         const v = this.barrelViews.get(e.id);
         if (v) {
           this.barrelViews.delete(e.id);
+          // Reference (wallBounce f226-f240): the crate is gone almost at once
+          // under a white puff with wood chips scattering; ~0.33s total. Play the
+          // rig's authored 0.1s break, yank the alpha fast, and layer the puff.
           v.state.setAnimation(0, 'hp0', false);
           let t = 0;
           const fade = (tk: { deltaMS: number }): void => {
@@ -337,19 +542,36 @@ export class GameScene {
             // it left barrelViews, so syncViews no longer ticks it and autoUpdate
             // is off — drive the hp0 break pose here or it freezes mid-fade
             v.update(step);
-            v.alpha = Math.max(0, 1 - t / 0.45);
-            if (t >= 0.45) {
+            v.alpha = Math.max(0, 1 - t / 0.15);
+            if (t >= 0.15) {
               this.app.ticker.remove(fade);
               v.destroy();
             }
           };
           this.app.ticker.add(fade);
         }
+        this.crateBreak(e.x, e.y);
         break;
       }
       default:
         break; // counter/waveStarted/finaleArmed/won get UI in Phase C
     }
+  }
+
+  /** Take one duck off the spawn queue per stagger period and build its view. */
+  private drainSpawnQueue(dt: number): void {
+    this.spawnTimer -= dt;
+    while (this.spawnTimer <= 0 && this.spawnQueue.length > 0) {
+      const d = this.spawnQueue.shift()!;
+      // every dequeue costs a slot, live or not, exactly like the official's
+      // unconditional 55ms delayedCall — so the cadence never bunches up
+      this.spawnTimer = SPAWN_STAGGER;
+      // popped while still queued (a blast can doom a viewless duck), or a view
+      // somehow already exists: drop it silently
+      if (!this.director.world.ducks.includes(d) || this.duckViews.has(d.id)) continue;
+      this.addDuck(d);
+    }
+    if (this.spawnQueue.length === 0 && this.spawnTimer < 0) this.spawnTimer = 0;
   }
 
   private addDuck(d: Duck): void {
@@ -361,9 +583,49 @@ export class GameScene {
     // rotation is continuous across selections instead of snapping back to 0 —
     // and while no ring is attached it drives invisible bones for free.
     s.state.setAnimation(T_SPIN, 'spin_ring', true);
+    // the water ripple loops forever under the duck; the desynced per-duck
+    // timeScale (below) keeps the rings from pulsing in lockstep
+    s.state.setAnimation(T_RIPPLE, 'ripple', true);
     s.state.timeScale = 0.8 + (d.id % 5) * 0.1;
-    s.scale.set(DUCK_SCALE);
+    // entry: spawn_enter plays at TRUE speed (compensate the desync scale)
+    // while the whole rig pops from ~zero with the official's Back overshoot.
+    // The empty animation behind it releases `master`/`head*` when it ends.
+    const enter = s.state.setAnimation(T_SPAWN, 'spawn_enter', false);
+    enter.timeScale = 1 / s.state.timeScale;
+    s.state.addEmptyAnimation(T_SPAWN, 0.1, 0);
+    this.burst(d.x, d.y, 0xffffff, 0.7); // the official's white spawn splash
+    s.scale.set(DUCK_SCALE * 0.001);
+    this.spawning.add(d.id);
+    let t = 0;
+    const grow = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      // bail the moment the view stops being this duck's live view — popDuck
+      // hands it to the explode animation, which owns the scale from then on
+      if (s.destroyed || this.duckViews.get(d.id) !== s) {
+        this.app.ticker.remove(grow);
+        this.spawning.delete(d.id);
+        return;
+      }
+      const k = Math.min(1, t / SPAWN_SCALE_TIME);
+      s.scale.set(DUCK_SCALE * (0.001 + (1 - 0.001) * backOut(k)));
+      if (k >= 1) {
+        this.app.ticker.remove(grow);
+        this.spawning.delete(d.id);
+        s.scale.set(DUCK_SCALE);
+      }
+    };
+    this.app.ticker.add(grow);
     s.position.set(d.x, d.y);
+    // steer the aim teardrop after the animation is applied, before the world
+    // transforms bake — the supported spine hook for per-frame bone overrides
+    const bone = s.skeleton.findBone(AIM_BONE);
+    if (bone) {
+      const id = d.id;
+      s.beforeUpdateWorldTransforms = () => {
+        const rot = this.aimBoneRot.get(id);
+        if (rot !== undefined) bone.rotation = rot;
+      };
+    }
     this.layer.addChild(s);
     this.duckViews.set(d.id, s);
   }
@@ -402,6 +664,34 @@ export class GameScene {
       }
     };
     this.app.ticker.add(run);
+  }
+
+  /**
+   * Official onWallHit: a soft foam smear at the contact point, widening as it
+   * fades (their `foam` at alpha .5, 45×27 px growing to 81 wide, 240ms
+   * QuadOut). Laid along the wall so it reads as displaced water.
+   */
+  private wallFoam(x: number, y: number, nx: number, ny: number): void {
+    const s = new Sprite(this.blobTex);
+    s.anchor.set(0.5);
+    s.position.set(x, y);
+    s.rotation = Math.atan2(ny, nx) + Math.PI / 2; // long axis along the wall
+    s.alpha = 0.5;
+    s.width = 45;
+    s.height = 27;
+    this.fx.addChild(s);
+    let t = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      const p = Math.min(1, t / 0.24);
+      s.width = 45 + 36 * quadOut(p);
+      s.alpha = 0.5 * (1 - p);
+      if (p >= 1) {
+        this.app.ticker.remove(anim);
+        s.destroy();
+      }
+    };
+    this.app.ticker.add(anim);
   }
 
   /** Star splash — the shipped impact-star. `k` scales it (matches use 0.7). */
@@ -452,8 +742,71 @@ export class GameScene {
     this.app.ticker.add(anim);
   }
 
+  /**
+   * Crate destruction, matched to the reference footage (wallBounce f226-f240):
+   * a soft white puff swallows the crate while wooden chips scatter, all
+   * resolved in about a third of a second, with a small sparkle outliving it.
+   */
+  private crateBreak(x: number, y: number): void {
+    // the puff: opaque white cloud, quick swell then dissolve
+    const puff = new Sprite(this.blobTex);
+    puff.anchor.set(0.5);
+    puff.position.set(x, y);
+    this.fx.addChild(puff);
+    let pt = 0;
+    const puffAnim = (tk: { deltaMS: number }): void => {
+      pt += tk.deltaMS / 1000;
+      const p = Math.min(1, pt / 0.3);
+      puff.width = puff.height = (60 + 55 * quadOut(p)) * 2;
+      puff.alpha = p < 0.4 ? 1 : 1 - (p - 0.4) / 0.6;
+      if (p >= 1) {
+        this.app.ticker.remove(puffAnim);
+        puff.destroy();
+      }
+    };
+    this.app.ticker.add(puffAnim);
+
+    // wooden chips thrown outward, sinking slightly as they fade — the star
+    // sprite tints clean (the blob's dark rim turns muddy at chip size)
+    for (let i = 0; i < 6; i++) {
+      const chip = new Sprite(this.starTex);
+      chip.anchor.set(0.5);
+      chip.rotation = i * 1.1;
+      chip.tint = i % 2 === 0 ? 0xE08A3C : 0xB5722F;
+      chip.width = chip.height = 18 + (i % 3) * 6;
+      const ang = (i / 6) * Math.PI * 2 + 0.5;
+      const speed = 320 + (i % 3) * 70;
+      const vx = Math.cos(ang) * speed;
+      let vy = Math.sin(ang) * speed - 60;
+      chip.position.set(x + Math.cos(ang) * 30, y + Math.sin(ang) * 30);
+      this.fx.addChild(chip);
+      let ct = 0;
+      const chipAnim = (tk: { deltaMS: number }): void => {
+        const dt = tk.deltaMS / 1000;
+        ct += dt;
+        vy += 900 * dt; // chips arc down like the reference debris
+        chip.x += vx * dt;
+        chip.y += vy * dt;
+        chip.alpha = Math.max(0, 1 - ct / 0.35);
+        if (ct >= 0.35) {
+          this.app.ticker.remove(chipAnim);
+          chip.destroy();
+        }
+      };
+      this.app.ticker.add(chipAnim);
+    }
+
+    // the little sparkle that hangs around after the puff clears
+    this.burst(x - 15, y - 40, 0xffffff, 0.45);
+  }
+
   /** Squash-free scale punch on a matched duck — the official's `hit()` tween. */
   private punch(v: Spine): void {
+    // a duck still inside its spawn scale-up owns its own scale — punching it
+    // would snap it to full size mid-entry
+    for (const [id, dv] of this.duckViews) {
+      if (dv === v && this.spawning.has(id)) return;
+    }
     let t = 0;
     const anim = (tk: { deltaMS: number }): void => {
       t += tk.deltaMS / 1000;
@@ -538,13 +891,21 @@ export class GameScene {
   }
 
   /**
-   * Official aim visuals: a crawling dotted trajectory (one wall bounce), a red
-   * X where the path dead-ends into nothing, and a white billiards deflection
-   * streak off a struck duck. The X is advisory — release still fires.
+   * Reference-video aim visuals: crawling aim-dot sprites along the projected
+   * path (one wall bounce), a red X wherever the path fails to reach a duck
+   * (empty space, wall, or a barrel blocking the lane), the red contact
+   * crescent hugging the aimed-at duck's rim, and a white billiards deflection
+   * streak off a struck duck. The X is BINDING — releasing on it refuses the
+   * shot (Slingshot.end() re-checks the same trajectory).
    */
   private drawAim(pv: AimPreview | null): void {
     this.aimLine.clear();
-    if (!pv) return;
+    let dotsUsed = 0;
+    if (!pv) {
+      for (const d of this.dotPool) d.visible = false;
+      this.crescent.visible = false;
+      return;
+    }
 
     // --- dots along the polyline ---
     const segs: Array<{ x0: number; y0: number; ux: number; uy: number; len: number }> = [];
@@ -569,15 +930,39 @@ export class GameScene {
       }
       const seg = segs[s]!;
       const g = total > 0 ? arc / total : 0;
-      this.aimLine
-        .circle(seg.x0 + seg.ux * rem, seg.y0 + seg.uy * rem, (18 - 5.4 * g) / 2)
-        .fill({ color: 0xffffff, alpha: 1 - 0.3 * g });
+      const dot = this.dotPool[dotsUsed++]!;
+      dot.visible = true;
+      dot.position.set(seg.x0 + seg.ux * rem, seg.y0 + seg.uy * rem);
+      dot.alpha = 1 - 0.3 * g;
     }
+    for (let n = dotsUsed; n < DOT_MAX; n++) this.dotPool[n]!.visible = false;
 
     const endPt = pv.points[pv.points.length - 1]!;
 
-    // --- red X where the shot hits nothing ---
-    if (pv.hitId === null) {
+    // --- red contact crescent on the aimed-at duck's rim ---
+    if (pv.hitKind === 'duck') {
+      const struck = this.director.world.ducks.find((d) => d.id === pv.hitId);
+      if (struck) {
+        const vx = endPt.x - struck.x, vy = endPt.y - struck.y;
+        const len = Math.hypot(vx, vy) || 1;
+        const ux = vx / len, uy = vy / len;
+        this.crescent.visible = true;
+        // past the physics radius so it clears the duck ART (~57px at this scale)
+        // and sits on the ripple, like the reference frames
+        this.crescent.position.set(
+          struck.x + ux * (SIM.DUCK_R + 22), struck.y + uy * (SIM.DUCK_R + 22),
+        );
+        // pill art is vertical, convex side +x: point the bulge away from the duck
+        this.crescent.rotation = Math.atan2(uy, ux);
+      } else {
+        this.crescent.visible = false;
+      }
+    } else {
+      this.crescent.visible = false;
+    }
+
+    // --- red X wherever the shot fails to reach a duck ---
+    if (pv.hitKind !== 'duck') {
       const a = 20 / Math.SQRT2; // arm extent 20 along each diagonal
       const stroke = { width: 12, color: 0xE8354A, alpha: 0.95, cap: 'round' as const };
       this.aimLine
@@ -585,23 +970,34 @@ export class GameScene {
         .moveTo(endPt.x + a, endPt.y - a).lineTo(endPt.x - a, endPt.y + a).stroke(stroke);
     }
 
-    // --- white tapered streak off a struck duck (equal-mass billiards) ---
+    // --- white deflection wedge on a struck duck (equal-mass billiards) ---
+    // The real game's arrow (wallBounce-HowToAim.mp4 ~4.7-5.1s): a solid-white
+    // speech-bubble-tail — wide rounded base tucked UNDER the duck art (this
+    // layer sits below the ducks, so the base fuses with the duck's white base
+    // ring), both edges gently concave, sharp tip ~2.3 duck-radii from the
+    // centre. Static: no pulse, it only rotates with the predicted direction.
     if (pv.hitKind === 'duck' && pv.deflect) {
       const struck = this.director.world.ducks.find((d) => d.id === pv.hitId);
       if (struck) {
         const dx = pv.deflect.x, dy = pv.deflect.y;
-        const bx = struck.x + dx * SIM.DUCK_R;
-        const by = struck.y + dy * SIM.DUCK_R;
-        const N = 4;
-        for (let i = 0; i < N; i++) {
-          const t0 = (i / N) * DEFLECT_LEN;
-          const t1 = ((i + 1) / N) * DEFLECT_LEN;
-          const w = 10 - (8 * (i + 0.5)) / N; // 10px at the duck -> 2px at the tip
-          this.aimLine
-            .moveTo(bx + dx * t0, by + dy * t0)
-            .lineTo(bx + dx * t1, by + dy * t1)
-            .stroke({ width: w, color: 0xffffff, alpha: 0.9, cap: 'round' });
-        }
+        const px = -dy, py = dx; // unit perpendicular
+        const R = SIM.DUCK_R;
+        const w = R * DEFLECT_BASE_W;
+        const at = (along: number, side: number): { x: number; y: number } => ({
+          x: struck.x + dx * R * along + px * w * side,
+          y: struck.y + dy * R * along + py * w * side,
+        });
+        const b1 = at(DEFLECT_BASE, 1);
+        const b2 = at(DEFLECT_BASE, -1);
+        const c1 = at(DEFLECT_WAIST, DEFLECT_PINCH);
+        const c2 = at(DEFLECT_WAIST, -DEFLECT_PINCH);
+        const tip = at(DEFLECT_TIP, 0);
+        this.aimLine
+          .moveTo(b1.x, b1.y)
+          .quadraticCurveTo(c1.x, c1.y, tip.x, tip.y)
+          .quadraticCurveTo(c2.x, c2.y, b2.x, b2.y)
+          .closePath()
+          .fill({ color: 0xffffff, alpha: 0.95 });
       }
     }
   }

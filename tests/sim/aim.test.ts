@@ -50,6 +50,7 @@ describe('Slingshot', () => {
   it('pull back fires the duck in the opposite direction', () => {
     const w = new World(1);
     const d = w.spawnDuck('red', 300, 700);
+    w.spawnDuck('green', 300, 300); // straight up the lane — makes the aim valid
     const s = new Slingshot(w);
     s.begin(300, 700);
     s.move(300, 850); // pulled straight down 150
@@ -63,6 +64,7 @@ describe('Slingshot', () => {
   it('launch speed is fixed regardless of pull length', () => {
     const short = new World(1);
     const ds = short.spawnDuck('red', 300, 700);
+    short.spawnDuck('green', 300, 300);
     const ss = new Slingshot(short);
     ss.begin(300, 700);
     ss.move(300, 760); // 60px pull
@@ -70,6 +72,7 @@ describe('Slingshot', () => {
 
     const long = new World(1);
     const dl = long.spawnDuck('red', 300, 700);
+    long.spawnDuck('green', 300, 300);
     const sl = new Slingshot(long);
     sl.begin(300, 700);
     sl.move(300, 1200); // 500px pull
@@ -97,12 +100,41 @@ describe('Slingshot', () => {
   it('assist 0 leaves the aim unchanged', () => {
     const w = new World(1);
     const d = w.spawnDuck('red', 360, 900);
-    w.spawnDuck('red', 460, 300);
+    // inside the straight-up sweep corridor, so the unassisted shot is valid
+    w.spawnDuck('red', 430, 300);
     const s = new Slingshot(w);
     s.assist = 0;
     s.begin(360, 900);
     s.move(360, 1050);
-    s.end();
+    expect(s.end()).toBe(true);
+    expect(d.live).toBe(true);
     expect(Math.abs(d.vx)).toBeLessThan(1);
+  });
+
+  it('refuses to release into empty space — the aim must reach a duck', () => {
+    const w = new World(1);
+    const d = w.spawnDuck('red', 300, 700); // alone in the tub
+    const s = new Slingshot(w);
+    s.begin(300, 700);
+    s.move(300, 850); // real pull, aims up at nothing
+    expect(s.preview()?.hitKind ?? null).not.toBe('duck'); // the UI shows the X
+    expect(s.end()).toBe(false);
+    expect(d.live).toBe(false);
+    expect(d.x).toBe(300);
+    expect(d.y).toBe(700);
+  });
+
+  it('refuses a shot whose lane a barrel blocks before the duck', () => {
+    const w = new World(1);
+    const d = w.spawnDuck('red', 300, 900);
+    w.spawnDuck('green', 300, 400); // the intended target…
+    w.spawnBarrel('wood', 300, 700, 3); // …with a barrel square in the lane
+    const s = new Slingshot(w);
+    s.assist = 0;
+    s.begin(300, 900);
+    s.move(300, 1050); // aim straight up
+    expect(s.preview()?.hitKind).toBe('barrel'); // X at the barrel face
+    expect(s.end()).toBe(false);
+    expect(d.live).toBe(false);
   });
 });

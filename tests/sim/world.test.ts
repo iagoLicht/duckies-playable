@@ -35,19 +35,136 @@ describe('World motion', () => {
     expect(transferred).toBe(true); // momentum transferred
   });
 
+  it('wall kick: tangential speed survives, normal exit is a share of TOTAL speed', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 630, 700); // just past the right-wall centre limit (628)
+    d.vx = 100;
+    d.vy = -800; // grazing the wall, mostly upward
+    w.step(SIM.DT);
+    // official Yr: exit normal speed = 0.93·|v| even on a graze —
+    // a mirror bounce would only return the tiny 100 px/s
+    expect(d.vx).toBeLessThan(-600);
+    expect(d.vy).toBeLessThan(-700); // upward tangential kept
+  });
+
+  it('a slow duck is never absorbed: the minimum wall kick applies', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 630, 700);
+    d.vx = 45;
+    w.step(SIM.DT);
+    expect(d.vx).toBeLessThan(-100); // WALL_MIN_KICK, not 0.93·45
+  });
+
+  it('wall contact emits a wallHit event with the outward normal', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 630, 700);
+    d.vx = 200;
+    w.step(SIM.DT);
+    const hits = w.events.filter((e) => e.type === 'wallHit');
+    expect(hits.length).toBeGreaterThan(0);
+    const h = hits[0]!;
+    if (h.type !== 'wallHit') throw new Error('unreachable');
+    expect(h.nx).toBeLessThan(-0.9); // right wall pushes left
+    expect(h.source).toBe('wall');
+  });
+
+  it('the wall kick is capped at MAX_SPEED', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 630, 700);
+    d.vx = 6000;
+    w.step(SIM.DT);
+    expect(Math.hypot(d.vx, d.vy)).toBeLessThanOrEqual(SIM.MAX_SPEED + 1);
+  });
+
+  it('a fresh shot flies with low drag until its first contact', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 360, 1100);
+    w.launch(d.id, 0, -SIM.LAUNCH_SPEED);
+    for (let i = 0; i < 15; i++) w.step(SIM.DT); // 0.25 s, nothing to hit yet
+    expect(Math.hypot(d.vx, d.vy)).toBeGreaterThan(SIM.LAUNCH_SPEED * 0.85);
+  });
+
+  it('after the first contact, drag jumps and the shot dies down fast', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 360, 1100);
+    w.launch(d.id, 0, SIM.LAUNCH_SPEED); // straight into the bottom wall
+    for (let i = 0; i < 30; i++) w.step(SIM.DT); // bounce, then 0.45 s of contact drag
+    const speed = Math.hypot(d.vx, d.vy);
+    expect(speed).toBeLessThan(1500); // flight drag alone would leave ~2300
+    expect(speed).toBeGreaterThan(500); // but it is still moving — walls kick, not absorb
+  });
+
   it('duck hitting a barrel bounces back and damages it', () => {
     const w = mk();
     const barrel = w.spawnBarrel('wood', 500, 700, 2);
     const d = w.spawnDuck('red', 300, 700);
     w.launch(d.id, 1000, 0);
     // window ends after the rebound but before the duck can return off the wall
-    // for a second contact (FRICTION 0.6 keeps it live far longer than 1.5 s)
+    // for a second contact (post-contact drag kills the rebound well short of it)
     for (let i = 0; i < 30; i++) w.step(SIM.DT);
     expect(barrel.hp).toBe(1);
     expect(d.vx).toBeLessThan(0); // bounced back
     expect(d.x).toBeLessThan(500 - 46); // did not tunnel through
     const evs = w.events.filter((e) => e.type === 'barrelDamaged');
     expect(evs).toHaveLength(1);
+  });
+
+  it('a direct hit removes exactly one stage — every duck colour', () => {
+    for (const colour of ['yellow', 'green', 'purple', 'red'] as const) {
+      const w = mk();
+      const barrel = w.spawnBarrel('wood', 500, 700, 3);
+      const d = w.spawnDuck(colour, 300, 700);
+      w.launch(d.id, 1000, 0);
+      for (let i = 0; i < 30; i++) w.step(SIM.DT);
+      expect(barrel.hp).toBe(2); // one stage, no skips
+      const hits = w.events.filter((e) => e.type === 'barrelDamaged');
+      expect(hits).toHaveLength(1); // one collision = one stage, never more
+    }
+  });
+
+  it('a duck KNOCKED into a barrel damages it too (not just the shot)', () => {
+    const w = mk();
+    const barrel = w.spawnBarrel('wood', 560, 700, 3);
+    const knocked = w.spawnDuck('green', 400, 700); // never launched
+    const shooter = w.spawnDuck('red', 300, 700);
+    w.launch(shooter.id, 1200, 0);
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
+    expect(knocked.live).toBe(false); // it was never the shot
+    expect(barrel.hp).toBe(2);
+  });
+
+  it('a nearby explosion removes exactly one stage — every duck colour', () => {
+    for (const colour of ['yellow', 'green', 'purple', 'red'] as const) {
+      const w = mk();
+      const barrel = w.spawnBarrel('wood', 360, 815, 3); // 115 < BLAST_R of the pop
+      const d = w.spawnDuck(colour, 360, 700);
+      w.popDuck(d);
+      expect(barrel.hp).toBe(2);
+      const hits = w.events.filter((e) => e.type === 'barrelDamaged');
+      expect(hits).toHaveLength(1);
+    }
+  });
+
+  it('mixed damage sources step hp down exactly one at a time, never skipping', () => {
+    const w = mk();
+    const barrel = w.spawnBarrel('wood', 360, 815, 3); // two straps
+    // 1: nearby explosion (yellow duck) -> one strap
+    w.popDuck(w.spawnDuck('yellow', 360, 700));
+    expect(barrel.hp).toBe(2);
+    // 2: direct hit (purple duck, different colour) -> no straps
+    const d = w.spawnDuck('purple', 360, 500);
+    w.launch(d.id, 0, 1000);
+    for (let i = 0; i < 30 && barrel.hp === 2; i++) w.step(SIM.DT);
+    expect(barrel.hp).toBe(1);
+    // 3: another explosion -> destroyed and gone
+    w.popDuck(w.spawnDuck('green', 360, 930));
+    expect(barrel.hp).toBe(0);
+    expect(w.barrels).toHaveLength(0);
+    // the event stream saw each stage exactly once, in order
+    const hps = w.events.filter((e) => e.type === 'barrelDamaged')
+      .map((e) => (e as { hp: number }).hp);
+    expect(hps).toEqual([2, 1]);
+    expect(w.events.filter((e) => e.type === 'barrelDestroyed')).toHaveLength(1);
   });
 
   it('a slow drifting duck does NOT damage a barrel', () => {

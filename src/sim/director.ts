@@ -5,8 +5,9 @@ import { World } from './world';
 
 /**
  * Level orchestration: waves, barrel counter, duck respawns, aim-assist ramp,
- * and the rigged finale (golden barrel at 1hp -> respawns stop -> the last
- * duck delivers the winning blow with near-max assist).
+ * and the rigged finale (golden barrel at 1hp -> respawns thin out to the
+ * final PAIR: with duck-only shot validation one lone duck would be unaimable,
+ * so the closing beat is slinging one duck into the other by the barrel).
  */
 export class Director {
   readonly world: World;
@@ -45,8 +46,7 @@ export class Director {
     if (!w) return;
     for (const b of w.barrels) {
       this.world.spawnBarrel(
-        b.skin as 'wood' | 'yellow' | 'purple' | 'red',
-        b.x, b.y, b.hp, (b as { golden?: boolean }).golden ?? false,
+        b.skin, b.x, b.y, b.hp, (b as { golden?: boolean }).golden ?? false,
       );
     }
     this.slingshot.assist = w.assist;
@@ -93,8 +93,10 @@ export class Director {
     const waveDef = LEVEL.WAVES[this.wave - 1];
     if (!waveDef) return;
     let target = waveDef.targetDucks as number;
-    if (this.finaleArmed) target = 1; // the "final duck" moment
-    if (this.world.ducks.length === 0) target = Math.max(target, 1); // never softlock
+    if (this.finaleArmed) target = 2; // the "final pair" moment
+    // a shot is only valid aimed at another duck, so one duck alone is a
+    // softlock — the field must never settle below two
+    if (this.world.ducks.length < 2) target = Math.max(target, 2);
 
     if (this.world.ducks.length >= target) {
       this.respawnAt = null;

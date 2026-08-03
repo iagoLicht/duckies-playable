@@ -23,8 +23,11 @@ const firstTick = (log: Stamped[], type: SimEvent['type']): number =>
  * The official model (decomp `flagMatched`/`popDuck`/`explodeAt`, measured
  * against the shipped example): same-colour contact at speed does not pop, it
  * lights a 90-tick fuse. The duck keeps every bit of its physics while it burns
- * down, then pops and detonates. A blast relights a *fresh* fuse on the ducks it
- * catches, so every chain generation costs a further 90 ticks.
+ * down, then pops and detonates. A blast dooms every duck it NEWLY catches,
+ * whatever its colour (user-locked change over the official): nudged, blinking,
+ * and popping only once it is fully idle — settled and held still for the
+ * confirmation period, never mid-slide. A duck already on a contact fuse keeps
+ * that fuse, so a matched pair still pops together.
  *
  * The fuse is decremented on the same tick it is lit, exactly as the official's
  * tick() does (its fuse pass runs after contact resolution) — so a duck reads
@@ -104,7 +107,7 @@ describe('same-colour matches, fuses and chain blasts', () => {
     expect(w.ducks).toHaveLength(2);
   });
 
-  it('a blast relights a fresh fuse: chains cost one fuse per generation', () => {
+  it('a blast dooms every duck it catches, whatever the colour; each pops once settled', () => {
     const w = new World(1);
     const a = w.spawnDuck('red', 300, 700);
     w.spawnDuck('red', 393, 700);
@@ -114,22 +117,25 @@ describe('same-colour matches, fuses and chain blasts', () => {
     // ducks' path at y = 700 so neither is knocked about on the way through.
     // third red parked well inside BLAST_R of where the pair goes off (117 away)
     const c = w.spawnDuck('red', 340, 810);
-    // green bystander in the same blast (128 away) — colour still gates the chain
+    // green bystander in the same blast (128 away) — doomed too: blasts are
+    // colour-blind (user-locked 2026-08-03), each victim pops when it settles
     const green = w.spawnDuck('green', 235, 810);
     w.launch(a.id, 140, 0);
-    const log = record(w, 400);
+    const log = record(w, 600);
 
     const chainMatch = log.filter((s) => s.e.type === 'duckMatched' && (s.e as { id: number }).id === c.id);
     expect(chainMatch).toHaveLength(1);
     const blasts = log.filter((s) => s.e.type === 'blast');
-    // two from the pair (same tick), one from the duck the blast caught
-    expect(blasts).toHaveLength(3);
+    // two from the pair (same tick), then one per caught duck as it settles
+    expect(blasts).toHaveLength(4);
     expect(blasts[0]!.tick).toBe(blasts[1]!.tick);
-    // the chained duck was flagged by the pair's blast and burned a whole fuse
     expect(chainMatch[0]!.tick).toBe(blasts[0]!.tick);
-    expect(blasts[2]!.tick - blasts[0]!.tick).toBe(FUSE);
-    expect(w.ducks).toHaveLength(1);
-    expect(w.ducks[0]!.id).toBe(green.id);
+    // the knocked victims need their slide plus a full stillness hold before
+    // they go off — staged, never instant
+    for (const s of [blasts[2]!, blasts[3]!]) {
+      expect(s.tick - blasts[0]!.tick).toBeGreaterThan(SIM.BLAST_SETTLE_CONFIRM_TICKS);
+    }
+    expect(w.ducks).toHaveLength(0);
   });
 
   it('blasts damage barrels of any colour in radius', () => {
@@ -138,13 +144,13 @@ describe('same-colour matches, fuses and chain blasts', () => {
     // the barrel must sit inside both pop discs while staying clear of the lane
     // the ducks run down — a direct hit would damage it as well. The struck duck
     // is shot hard enough to rebound off the far wall and come most of the way
-    // back inside its fuse, putting the two pop points ~100 apart at (301.8, 700)
-    // and (403.4, 700); the barrel tucks under their midpoint, 115 below the lane
-    // (clear of DUCK_R + BARREL_R = 106) and ~126 from each pop point.
-    const barrel = w.spawnBarrel('purple', 353, 815, 3);
+    // back inside its fuse, putting the two pop points ~107 apart at (288.8, 700)
+    // and (396.1, 700); the barrel tucks under their midpoint, 115 below the lane
+    // (clear of DUCK_R + BARREL_R = 106) and ~127 from each pop point.
+    const barrel = w.spawnBarrel('wood', 342, 815, 3);
     const a = w.spawnDuck('red', 300, 700);
     w.spawnDuck('red', 393, 700);
-    w.launch(a.id, 533, 0);
+    w.launch(a.id, 900, 0);
     record(w, 200);
     expect(barrel.hp).toBe(1); // one hit from each of the pair's two blasts
   });

@@ -10,7 +10,8 @@ import type { Duck } from './types';
 export interface AimPreview {
   /** polyline of the projected path: [start, ...] with 2 points (direct) or 3 (one wall bounce) */
   points: Array<{ x: number; y: number }>;
-  /** first duck or barrel the swept circle hits, or null (-> red X) */
+  /** first duck or barrel the swept circle hits, or null. Only a 'duck' hit is
+   *  a valid shot — anything else draws the red X and refuses the release. */
   hitId: number | null;
   hitKind: 'duck' | 'barrel' | null;
   /** unit direction the STRUCK DUCK will travel after impact (billiards normal), null unless hitKind==='duck' */

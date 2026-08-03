@@ -6,8 +6,14 @@ import type { Duck } from './types';
 /**
  * Pull-back slingshot: begin() on/near a duck, move() drags the pointer away,
  * end() fires opposite the pull at a fixed speed; the drag sets direction only.
- * Aim assist bends the launch direction toward the best target (same-colour
- * duck or any barrel) within the assist cone.
+ * Aim assist bends the launch direction toward the angularly-nearest OTHER DUCK
+ * within the assist cone (not barrels: a shot must reach a duck to fire, so
+ * bending aim onto a barrel would steer players into refused shots).
+ *
+ * Real-game shot validation (user-locked 2026-08-03): a shot is only valid when
+ * the projected trajectory reaches another DUCK. Releasing on a red-X aim —
+ * empty space, wall, or a barrel-first path — refuses to fire (the grab just
+ * lets go), so every launched duck is aimed at a duck.
  */
 export class Slingshot {
   /** 0..1 — director raises this over the level */
@@ -91,6 +97,10 @@ export class Slingshot {
     const dir = this.aimDir();
     this.duck = null;
     if (!duck || !dir) return false;
+    // the release is refused unless the trajectory reaches another duck — the
+    // player must adjust until the guide locks a target (the aim UI shows the
+    // red X for exactly the aims this rejects)
+    if (predictShot(this.world, duck, dir).hitKind !== 'duck') return false;
     this.world.launch(duck.id, dir.x * SIM.LAUNCH_SPEED, dir.y * SIM.LAUNCH_SPEED);
     return true;
   }
@@ -111,9 +121,8 @@ export class Slingshot {
       }
     };
     for (const d of this.world.ducks) {
-      if (d.id !== duck.id && d.colour === duck.colour && !d.popping) consider(d.x, d.y);
+      if (d.id !== duck.id && !d.popping) consider(d.x, d.y);
     }
-    for (const b of this.world.barrels) consider(b.x, b.y);
     if (!bestDir) return { dx, dy };
     const t = this.assist;
     const bd = bestDir as { dx: number; dy: number };

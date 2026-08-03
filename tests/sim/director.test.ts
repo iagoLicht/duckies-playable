@@ -50,14 +50,15 @@ describe('Director', () => {
     expect(golden.hp).toBe(3);
     // bring golden to 1hp
     d.world.damageBarrel(golden, 2);
-    // pop ducks down to one
-    while (d.world.ducks.length > 1) {
+    // pop ducks down to the finale target — the final PAIR: with duck-only
+    // shot validation a single duck would have nothing to aim at
+    while (d.world.ducks.length > 2) {
       const duck = d.world.ducks[0]!;
       d.world.popDuck(duck);
       run(d, 0.5);
     }
     run(d, 3);
-    expect(d.world.ducks.length).toBe(1); // no respawn while finale armed
+    expect(d.world.ducks.length).toBe(2); // respawns hold at the pair while armed
     expect(d.world.events.concat(d.drained).some((e) => e.type === 'finaleArmed')).toBe(true);
     expect(d.slingshot.assist).toBeCloseTo(0.95);
   });

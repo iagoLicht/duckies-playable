@@ -1,20 +1,42 @@
 /** All tunables. Units: design px (720x1280 stage), seconds, px/s. */
 export const SIM = {
   DT: 1 / 60,
-  SUBSTEPS: 4,
+  /** adaptive substepping (official): enough substeps to keep per-substep travel near this */
+  SUBSTEP_DIST: 10,     // ≈ their 0.3·CANDY_RADIUS at 90 px/unit
 
   DUCK_R: 46,
   BARREL_R: 60,
 
-  FRICTION: 0.6,        // exponential damping per second while live
-  STOP_SPEED: 30,       // below this a live duck comes to rest
-  RESTITUTION_WALL: 0.82,
-  RESTITUTION_BODY: 0.95,
+  // ── movement, from the official example verbatim (decomp xr, at 90 px/unit).
+  // Drag is v *= 1/(1 + DRAG·dt) per fixed step, banded: a fresh shot flies
+  // nearly free (ramping quartically over DRAG_RAMP_TICKS), but the moment it
+  // touches anything the whole table switches to the heavy contact drag.
+  DRAG_FLIGHT: 0.45,    // qs — while the shot is still clean
+  DRAG_SETTLE: 1.35,    // Ws — ramp target, and any duck below SLOW_SPEED
+  DRAG_CONTACT: 1.6,    // Ks — everyone, once the shot has hit something
+  DRAG_RAMP_TICKS: 120, // Xs
+  STOP_SPEED: 38.2,     // √0.18 u/s — below this a duck halts dead
+  SLOW_SPEED: 52.5,     // √0.34 u/s — below this drag is DRAG_SETTLE
+  MAX_SPEED: 4140,      // Ar 46 u/s — cap applied after a wall/bumper kick
+
+  // ── wall bounce (decomp Yr): NOT a mirror. The tangential velocity survives
+  // untouched and the exit speed along the normal becomes a share of TOTAL
+  // speed, floored — so a grazing duck is thrown out and a wall never absorbs.
+  WALL_KICK: 0.93,      // ir
+  WALL_MIN_KICK: 135,   // 1.5 u/s
+  // user-tuned DOWN from the official peg fling (tr 2700 + er 0.5·v): the red
+  // bumpers should be a mild redirect, not a launcher — a head-on full-speed
+  // shot leaves at ~58% of its incoming speed, a slow roll still gets a
+  // visible (but modest) push, and grazing hits keep their tangential glide
+  BUMPER_KICK: 350,     // fixed part of the outgoing normal speed…
+  BUMPER_KEEP: 0.45,    // …plus this share of the incoming speed
+  RESTITUTION_BODY: 0.96,   // sr — duck-duck impulse
+  RESTITUTION_STATIC: 0.5,  // barrels: plain normal reflection at half energy
 
   GRAB_R: 80,           // pointer-to-duck pickup radius
   MIN_PULL: 40,         // below this, release is a whiff (no shot)
   // official threshold: pulls under this neither aim nor fire
-  LAUNCH_SPEED: 1200,   // fixed launch speed — drag sets direction only (official-example mechanic)
+  LAUNCH_SPEED: 2700,   // Os 30 u/s × shotForceScale 1 — drag sets direction only
 
   // Match constants below are the official example's, converted at our 90 px/unit.
   // (decomp `or`: POP_SPEED 1.4 u/s, BLAST_RADIUS 1.5 u, MATCH_FUSE_TICKS 90,
@@ -23,25 +45,41 @@ export const SIM = {
   // the fuse runs out. Each blast relights a fresh fuse on the ducks it catches,
   // so a chain costs one full fuse per generation.
   POP_SPEED: 126,       // min relative speed for a same-colour pair to match
-  BARREL_HIT_SPEED: 90, // min impact speed for a direct hit to damage a barrel
+  BARREL_HIT_SPEED: 90, // min approach speed for a direct hit to damage a barrel
+  BARREL_HIT_COOLDOWN_TICKS: 12, // one physical collision counts once (0.2s)
   BLAST_R: 135,
   MATCH_FUSE_TICKS: 90, // fixed steps from match to pop (60 ticks = 1 s)
   MATCH_BLINK_TICKS: 9, // fixed steps per white/normal blink band
+
+  // Blast shove (user-requested feel change over the official, which has no
+  // impulse and pops on the fuse alone): every duck inside the radius, whatever
+  // its colour, takes a SUBTLE radial kick and is DOOMED — it blinks from the
+  // moment the blast catches it, drifts a little, and explodes ONLY once it is
+  // fully idle: at rest AND static for the confirmation period below. Nothing
+  // else pops it — a victim never goes off mid-slide — so each generation reads
+  // slow and deliberate: pop → nudge → blink → settle → hold → pop.
+  BLAST_KNOCK: 150,      // px/s added at the blast centre…
+  BLAST_KNOCK_EDGE: 70,  // …falling off linearly to this at the rim
+  BLAST_SETTLE_CONFIRM_TICKS: 45, // consecutive fully-static ticks before the pop
 
   RESPAWN_DELAY: 0.6,
   ASSIST_CONE_DEG: 28,
 } as const;
 
+// Every barrel is the standard wooden crate (real-game look); positions are the
+// locked layout, untouched. hp doubles as the visible damage stage: 3 = both
+// metal clasp layers on, 2 = one clasp layer, 1 = bare planks, 0 = destroyed.
+// Each wave's total hit count matches the old tuning (12) so pacing is unchanged.
 const WAVES = [
   {
     assist: 0.35,
     targetDucks: 4,
     barrels: [
-      { skin: 'yellow', x: 250, y: 800, hp: 2 },
-      { skin: 'red', x: 470, y: 800, hp: 2 },
+      { skin: 'wood', x: 250, y: 800, hp: 3 },
+      { skin: 'wood', x: 470, y: 800, hp: 3 },
       { skin: 'wood', x: 120, y: 1090, hp: 2 },
-      { skin: 'wood', x: 285, y: 1090, hp: 2 },
-      { skin: 'wood', x: 450, y: 1090, hp: 2 },
+      { skin: 'wood', x: 285, y: 1090, hp: 1 },
+      { skin: 'wood', x: 450, y: 1090, hp: 1 },
       { skin: 'wood', x: 615, y: 1090, hp: 2 },
     ],
   },
@@ -49,18 +87,18 @@ const WAVES = [
     assist: 0.55,
     targetDucks: 4,
     barrels: [
-      { skin: 'purple', x: 250, y: 620, hp: 2 },
-      { skin: 'red', x: 470, y: 620, hp: 2 },
+      { skin: 'wood', x: 250, y: 620, hp: 3 },
+      { skin: 'wood', x: 470, y: 620, hp: 3 },
       { skin: 'wood', x: 120, y: 640, hp: 2 },
       { skin: 'wood', x: 615, y: 640, hp: 2 },
-      { skin: 'wood', x: 250, y: 1090, hp: 2 },
-      { skin: 'wood', x: 470, y: 1090, hp: 2 },
+      { skin: 'wood', x: 250, y: 1090, hp: 1 },
+      { skin: 'wood', x: 470, y: 1090, hp: 1 },
     ],
   },
   {
     assist: 0.85,
     targetDucks: 2,
-    barrels: [{ skin: 'yellow', x: 360, y: 700, hp: 3, golden: true }],
+    barrels: [{ skin: 'wood', x: 360, y: 700, hp: 3, golden: true }],
   },
 ] as const;
 

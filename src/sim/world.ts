@@ -14,6 +14,8 @@ export class World {
   readonly barrels: Barrel[] = [];
   readonly events: SimEvent[] = [];
   time = 0;
+  /** 0 while a fresh shot flies untouched (light drag); 1 after its first contact */
+  phase = 1;
   private nextId = 1;
 
   constructor(seed: number) {
@@ -24,6 +26,7 @@ export class World {
     const d: Duck = {
       id: this.nextId++, kind: 'duck', colour, x, y, vx: 0, vy: 0,
       live: false, popping: false, matched: false, matchFuse: 0,
+      popOnSettle: false, settleTicks: 0, ticksMoving: 0,
     };
     this.ducks.push(d);
     this.events.push({ type: 'duckSpawned', duck: d });
@@ -31,7 +34,12 @@ export class World {
   }
 
   spawnBarrel(skin: Barrel['skin'], x: number, y: number, hp: number, golden = false): Barrel {
-    const b: Barrel = { id: this.nextId++, kind: 'barrel', skin, x, y, hp, maxHp: hp, golden };
+    // hard cap: 2 clasp layers is the deepest stage a barrel can ever show
+    const capped = Math.max(1, Math.min(3, hp));
+    const b: Barrel = {
+      id: this.nextId++, kind: 'barrel', skin, x, y,
+      hp: capped, maxHp: capped, golden, hitCooldown: 0,
+    };
     this.barrels.push(b);
     this.events.push({ type: 'barrelSpawned', barrel: b });
     return b;
@@ -43,26 +51,54 @@ export class World {
     d.vx = vx;
     d.vy = vy;
     d.live = true;
+    d.ticksMoving = 0;
+    this.phase = 0; // the new shot flies clean until it touches something
     this.events.push({ type: 'duckLaunched', id });
   }
 
   step(dt: number): void {
     this.time += dt;
 
-    const damp = Math.exp(-SIM.FRICTION * dt);
-    for (const d of this.ducks) {
-      d.vx *= damp;
-      d.vy *= damp;
-      if (d.live && Math.hypot(d.vx, d.vy) < SIM.STOP_SPEED) {
-        d.vx = 0;
-        d.vy = 0;
-        d.live = false;
-        this.events.push({ type: 'duckStopped', id: d.id });
-      }
+    // contact-damage cooldowns tick down once per fixed step
+    for (const b of this.barrels) {
+      if (b.hitCooldown > 0) b.hitCooldown--;
     }
 
-    const h = dt / SIM.SUBSTEPS;
-    for (let s = 0; s < SIM.SUBSTEPS; s++) {
+    // official drag (decomp xr): banded, v *= 1/(1+drag·dt), with a hard stop
+    const stop2 = SIM.STOP_SPEED * SIM.STOP_SPEED;
+    const slow2 = SIM.SLOW_SPEED * SIM.SLOW_SPEED;
+    let max2 = 0;
+    for (const d of this.ducks) {
+      const sp2 = d.vx * d.vx + d.vy * d.vy;
+      if (sp2 === 0) continue;
+      if (sp2 < stop2) {
+        d.vx = 0;
+        d.vy = 0;
+        d.ticksMoving = 0;
+        if (d.live) {
+          d.live = false;
+          this.events.push({ type: 'duckStopped', id: d.id });
+        }
+        continue;
+      }
+      let drag: number;
+      if (sp2 < slow2) drag = SIM.DRAG_SETTLE;
+      else if (this.phase > 0) drag = SIM.DRAG_CONTACT;
+      else {
+        const t = Math.min(1, d.ticksMoving / SIM.DRAG_RAMP_TICKS);
+        drag = SIM.DRAG_FLIGHT + t * t * t * t * (SIM.DRAG_SETTLE - SIM.DRAG_FLIGHT);
+      }
+      const k = 1 / (1 + drag * dt);
+      d.vx *= k;
+      d.vy *= k;
+      d.ticksMoving++;
+      if (sp2 > max2) max2 = sp2;
+    }
+
+    // adaptive substeps (official): keep per-substep travel near SUBSTEP_DIST
+    const steps = Math.min(16, Math.max(2, Math.ceil((Math.sqrt(max2) * dt) / SIM.SUBSTEP_DIST)));
+    const h = dt / steps;
+    for (let s = 0; s < steps; s++) {
       for (const d of this.ducks) {
         d.x += d.vx * h;
         d.y += d.vy * h;
@@ -84,7 +120,20 @@ export class World {
     // popDuck splices, and its blast can flag ducks further along — snapshot
     for (const d of [...this.ducks]) {
       if (!d.matched || d.popping) continue;
-      d.matchFuse--;
+      d.matchFuse--; // drives the blink band; may run past 0 (see below)
+      if (d.popOnSettle) {
+        // A blast victim explodes ONLY when it is fully idle — dead still (the
+        // step snaps sub-STOP_SPEED motion to exactly zero) for a whole
+        // confirmation hold, the counter resetting the instant anything bumps
+        // it back into motion. Nothing else can pop it: its fuse keeps counting
+        // for the blink but never fires the shot out from under a moving duck,
+        // and drag guarantees it does come to rest.
+        d.settleTicks = d.vx === 0 && d.vy === 0 ? d.settleTicks + 1 : 0;
+        if (d.settleTicks >= SIM.BLAST_SETTLE_CONFIRM_TICKS) this.popDuck(d);
+        continue;
+      }
+      // contact-matched pairs are unchanged: pure fuse, settled or not, so a
+      // pair flagged on the same tick still pops on the same tick
       if (d.matchFuse <= 0) this.popDuck(d);
     }
   }
@@ -110,17 +159,40 @@ export class World {
     this.blast(d.colour, d.x, d.y);
   }
 
+  /**
+   * Official wall rule (decomp Yr): walls do NOT mirror. The tangential velocity
+   * survives untouched and the exit speed along the normal becomes a share of
+   * the duck's TOTAL speed, floored — a grazing duck is thrown out into the
+   * field, and a wall can never absorb a duck outright. Bumpers fling instead:
+   * a big fixed kick plus half the incoming speed. Speed is capped afterwards.
+   */
   private collideWalls(): void {
     for (const d of this.ducks) {
       const hit = collideCircle(d.x, d.y, SIM.DUCK_R);
       if (!hit) continue;
       d.x = hit.x;
       d.y = hit.y;
+      const speed = Math.hypot(d.vx, d.vy);
       const vn = d.vx * hit.nx + d.vy * hit.ny;
-      if (vn < 0) {
-        d.vx -= (1 + SIM.RESTITUTION_WALL) * vn * hit.nx;
-        d.vy -= (1 + SIM.RESTITUTION_WALL) * vn * hit.ny;
+      const tx = d.vx - vn * hit.nx;
+      const ty = d.vy - vn * hit.ny;
+      const kick = hit.source === 'bumper'
+        ? SIM.BUMPER_KICK + SIM.BUMPER_KEEP * speed
+        : Math.max(SIM.WALL_MIN_KICK, SIM.WALL_KICK * speed);
+      d.vx = tx + hit.nx * kick;
+      d.vy = ty + hit.ny * kick;
+      const out = Math.hypot(d.vx, d.vy);
+      if (out > SIM.MAX_SPEED) {
+        const f = SIM.MAX_SPEED / out;
+        d.vx *= f;
+        d.vy *= f;
       }
+      if (this.phase === 0) this.phase = 1;
+      this.events.push({
+        type: 'wallHit', id: d.id, source: hit.source,
+        x: d.x - hit.nx * SIM.DUCK_R * 0.8, y: d.y - hit.ny * SIM.DUCK_R * 0.8,
+        nx: hit.nx, ny: hit.ny, speed,
+      });
     }
   }
 
@@ -132,6 +204,7 @@ export class World {
         const dist = Math.hypot(dx, dy);
         const minD = SIM.DUCK_R * 2;
         if (dist >= minD || dist === 0) continue;
+        if (this.phase === 0) this.phase = 1; // any touch ends the shot's clean flight
         const nx = dx / dist, ny = dy / dist;
         // separate equally
         const push = (minD - dist) / 2;
@@ -175,13 +248,20 @@ export class World {
         const nx = dx / dist, ny = dy / dist;
         d.x = b.x + nx * minD;
         d.y = b.y + ny * minD;
+        if (this.phase === 0) this.phase = 1;
         const vn = d.vx * nx + d.vy * ny;
-        const impact = Math.abs(vn);
         if (vn < 0) {
-          d.vx -= (1 + SIM.RESTITUTION_WALL) * vn * nx;
-          d.vy -= (1 + SIM.RESTITUTION_WALL) * vn * ny;
+          // official bounceOffStatic: plain normal reflection at half energy
+          d.vx -= (1 + SIM.RESTITUTION_STATIC) * vn * nx;
+          d.vy -= (1 + SIM.RESTITUTION_STATIC) * vn * ny;
         }
-        if (d.live && impact > SIM.BARREL_HIT_SPEED) {
+        // ANY duck, any colour, launched or knocked: approaching faster than
+        // the threshold chips exactly one stage. vn < 0 restricts this to real
+        // approaches (a still-overlapping duck drifting AWAY doesn't re-hit),
+        // and the cooldown keeps one physical collision from counting twice
+        // across substeps or contact jitter.
+        if (vn < -SIM.BARREL_HIT_SPEED && b.hitCooldown === 0) {
+          b.hitCooldown = SIM.BARREL_HIT_COOLDOWN_TICKS;
           this.damageBarrel(b, 1);
         }
       }
@@ -201,9 +281,11 @@ export class World {
   }
 
   /**
-   * Detonation: same-colour ducks in radius get a FRESH fuse rather than an
-   * instant pop, so each chain generation costs one full fuse. Barrels take a
-   * hit regardless of colour.
+   * Detonation: EVERY duck in the radius, whatever its colour, takes a radial
+   * shove (linear centre→edge falloff), starts blinking, and is doomed — it
+   * drifts, settles, and only then explodes (see tickFuses), so each chain
+   * generation is paced by its victim's own slide. Barrels take a hit
+   * regardless of colour.
    *
    * Reach is pure CENTRE distance <= BLAST_R, with no body-radius padding, as
    * the official's `explodeAt` does (decomp: `fr(r.pos, A) > s`, s = radius²).
@@ -211,9 +293,24 @@ export class World {
   blast(colour: Colour, x: number, y: number): void {
     this.events.push({ type: 'blast', colour, x, y, r: SIM.BLAST_R });
     for (const d of this.ducks) {
-      if (d.colour !== colour || d.popping || d.matched) continue;
-      if (Math.hypot(d.x - x, d.y - y) <= SIM.BLAST_R) {
-        this.flagMatched(d);
+      if (d.popping) continue;
+      const dist = Math.hypot(d.x - x, d.y - y);
+      if (dist > SIM.BLAST_R) continue;
+      const kick = SIM.BLAST_KNOCK - (SIM.BLAST_KNOCK - SIM.BLAST_KNOCK_EDGE) * (dist / SIM.BLAST_R);
+      // dist 0 can't happen for a bystander (bodies separate), but guard anyway
+      const nx = dist > 0 ? (d.x - x) / dist : 0;
+      const ny = dist > 0 ? (d.y - y) / dist : -1;
+      d.vx += nx * kick;
+      d.vy += ny * kick;
+      d.live = true; // in motion now — the stop logic will settle it normally
+      const fresh = !d.matched;
+      this.flagMatched(d); // blink starts now (no-op if the fuse is already lit)
+      // Only a duck this blast newly caught becomes settle-gated. A duck already
+      // burning a contact fuse keeps it, so a same-colour pair — whose first
+      // pop necessarily blasts its partner — still goes off together.
+      if (fresh) {
+        d.popOnSettle = true; // detonates once settled and held still
+        d.settleTicks = 0;
       }
     }
     for (const b of [...this.barrels]) {
