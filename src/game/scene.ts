@@ -1,7 +1,8 @@
-import { Application, Container, Graphics } from 'pixi.js';
-import type { SkeletonData, Spine } from '@esotericsoftware/spine-pixi-v8';
+import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
+import { Skin, type SkeletonData, type Spine } from '@esotericsoftware/spine-pixi-v8';
 import { Director } from '../sim/director';
 import { SIM } from '../sim/config';
+import type { AimPreview } from '../sim/trajectory';
 import type { Barrel, Colour, Duck, SimEvent } from '../sim/types';
 import { loadSkeleton, makeSpine } from '../engine/spineLoader';
 
@@ -14,9 +15,36 @@ import cratePageUrl from '../assets/entities/crate-round/crate-round.webp';
 import handJsonUrl from '../assets/entities/tutorial-hand/tutorial-hand.json?url';
 import handAtlasText from '../assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
 import handPageUrl from '../assets/entities/tutorial-hand/tutorial-hand.webp';
+import starUrl from '../assets/vfx/impact-star.webp';
 
 const DUCK_SCALE = 0.9;
 const BARREL_SCALE = 0.85;
+
+const COLOURS: readonly Colour[] = ['yellow', 'green', 'purple', 'red'];
+const TINTS: Record<Colour, number> = {
+  yellow: 0xffd94d, green: 0x5cc80e, purple: 0xa44aed, red: 0xec273f,
+};
+/** the same hues pulled nearly all the way to white — the reference frame's
+ *  splash is white with only a whisper of the popped body's hue, and anything
+ *  more saturated reads as a grubby smear against the blue water */
+const BURST_TINTS: Record<Colour, number> = (() => {
+  const wash = (c: number): number => {
+    const ch = (sh: number): number => {
+      const v = (c >> sh) & 0xff;
+      return Math.round(v + (255 - v) * 0.85) << sh;
+    };
+    return ch(16) | ch(8) | ch(0);
+  };
+  return { yellow: wash(TINTS.yellow), green: wash(TINTS.green), purple: wash(TINTS.purple), red: wash(TINTS.red) };
+})();
+
+// Duck spine tracks. The body idle, the selection ring and the ring's slow spin
+// drive disjoint bones/slots, so they layer cleanly on separate tracks.
+const T_BODY = 0;
+const T_RING = 1;
+const T_SPIN = 2;
+/** explode_vfx runs 0.17s — a hair more so its last frame lands before destroy */
+const POP_TIME = 0.2;
 
 // aim visuals (official example): dots crawl forward along the projected path
 const DOT_SPACING = 36;
@@ -24,6 +52,15 @@ const DOT_START = 38;
 const DOT_MAX = 32;
 const DOT_CRAWL = 100; // px/s
 const DEFLECT_LEN = 90;
+
+/** Decode an image URL (path or data URI) into a Pixi texture — same one code
+ *  path for dev URLs and the build's inlined data URIs. */
+async function loadTexture(url: string): Promise<Texture> {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  return Texture.from(img);
+}
 
 /** remaining hp -> crate-round set-pose animation (clasps strip as hp falls) */
 function stageFor(b: { maxHp: number; hp: number }): string {
@@ -41,6 +78,11 @@ export class GameScene {
   private hand: Spine | null = null;
   private duckyData!: SkeletonData;
   private crateData!: SkeletonData;
+  /** per-colour "duck + ring bones" skin, built once (see init) */
+  private duckSkins = new Map<Colour, Skin>();
+  /** duck ids currently wearing the green selection ring */
+  private ringed = new Set<number>();
+  private starTex!: Texture;
   private accumulator = 0;
   /** monotonic clock driving the aim dot crawl */
   private aimClock = 0;
@@ -58,7 +100,23 @@ export class GameScene {
     this.crateData = await loadSkeleton({
       skelUrl: crateSkelUrl, atlasText: crateAtlasText, pageUrl: cratePageUrl,
     });
+    this.starTex = await loadTexture(starUrl);
     this.app.stage.addChild(this.layer, this.fx, this.aimLine);
+
+    // The rig's `active-ring` skin ships ZERO attachments — it exists to carry the
+    // ring BONES (active-ring, active-ring-scale, active-ring-scale4, active-ring2).
+    // Without it those bones are inactive and the `active` animation's attachment
+    // timelines silently no-op, so every duck wears colour + ring-bones combined.
+    const ringSkin = this.duckyData.findSkin('active-ring');
+    if (!ringSkin) throw new Error('ducky rig is missing the active-ring skin');
+    for (const c of COLOURS) {
+      const colourSkin = this.duckyData.findSkin(c);
+      if (!colourSkin) throw new Error(`ducky rig is missing the ${c} skin`);
+      const combined = new Skin(`${c}+ring`);
+      combined.addSkin(colourSkin);
+      combined.addSkin(ringSkin);
+      this.duckSkins.set(c, combined);
+    }
 
     this.wireInput();
     this.director.start();
@@ -118,8 +176,40 @@ export class GameScene {
       this.accumulator -= SIM.DT;
     }
     this.drainEvents();
+    // one trajectory probe per frame — the rings and the aim UI both read it
+    const pv = this.director.slingshot.preview();
     this.syncViews(dt);
-    this.drawAim();
+    this.syncRings(pv);
+    this.drawAim(pv);
+  }
+
+  /**
+   * Green ring == "you can grab this duck". Per-duck, so resting ducks keep
+   * their rings while another one flies. While aiming the board goes quiet:
+   * every ring hides except the one on the duck the trajectory will hit.
+   */
+  private syncRings(pv: AimPreview | null): void {
+    const aiming = this.director.slingshot.aiming;
+    const target = aiming && pv?.hitKind === 'duck' ? pv.hitId : null;
+    for (const d of this.director.world.ducks) {
+      const v = this.duckViews.get(d.id);
+      if (!v) continue;
+      this.setRing(d.id, v, aiming ? d.id === target : !d.live && !d.popping);
+    }
+  }
+
+  private setRing(id: number, v: Spine, on: boolean): void {
+    if (this.ringed.has(id) === on) return;
+    if (on) {
+      this.ringed.add(id);
+      // `active` attaches the ring to its slots and scales it in; it doesn't loop,
+      // so the entry holds the last frame and the ring simply stays up
+      v.state.setAnimation(T_RING, 'active', false);
+    } else {
+      this.ringed.delete(id);
+      // mixing out to empty restores the setup pose — i.e. detaches the ring
+      v.state.setEmptyAnimation(T_RING, 0);
+    }
   }
 
   private drainEvents(): void {
@@ -136,9 +226,11 @@ export class GameScene {
       case 'duckPopped': {
         const v = this.duckViews.get(e.id);
         if (v) {
-          v.destroy();
           this.duckViews.delete(e.id);
+          this.ringed.delete(e.id);
+          this.popDuck(v);
         }
+        this.burst(e.x, e.y, e.colour);
         break;
       }
       case 'blast':
@@ -186,9 +278,13 @@ export class GameScene {
 
   private addDuck(d: Duck): void {
     const s = makeSpine(this.duckyData);
-    s.skeleton.setSkinByName(d.colour);
+    s.skeleton.setSkin(this.duckSkins.get(d.colour)!);
     s.skeleton.setSlotsToSetupPose();
-    s.state.setAnimation(0, 'idle', true);
+    s.state.setAnimation(T_BODY, 'idle', true);
+    // one turn per 12s. It runs from birth and is never restarted, so the ring's
+    // rotation is continuous across selections instead of snapping back to 0 —
+    // and while no ring is attached it drives invisible bones for free.
+    s.state.setAnimation(T_SPIN, 'spin_ring', true);
     s.state.timeScale = 0.8 + (d.id % 5) * 0.1;
     s.scale.set(DUCK_SCALE);
     s.position.set(d.x, d.y);
@@ -207,12 +303,60 @@ export class GameScene {
     this.barrelViews.set(b.id, s);
   }
 
-  private flashBlast(x: number, y: number, r: number, colour: Colour): void {
-    // placeholder ring — Phase C replaces with vfx sprites
-    const tints: Record<Colour, number> = {
-      yellow: 0xffd94d, green: 0x5cc80e, purple: 0xa44aed, red: 0xec273f,
+  /**
+   * The duck's own death animation: `explode` is a 0-length pose that blows the
+   * head up, `explode_vfx` then scales the whole rig out over 0.17s. The view has
+   * already left duckViews (its sim duck is gone, so syncViews can't position or
+   * tick it) — drive it here, exactly like the barrel's hp0 fade.
+   */
+  private popDuck(v: Spine): void {
+    v.state.clearTracks(); // drop idle + ring + spin so nothing fights the pose
+    v.skeleton.setToSetupPose();
+    v.state.setAnimation(0, 'explode', false);
+    v.state.setAnimation(1, 'explode_vfx', false);
+    v.state.timeScale = 1;
+    let t = 0;
+    const run = (tk: { deltaMS: number }): void => {
+      const step = tk.deltaMS / 1000;
+      t += step;
+      v.update(step);
+      if (t >= POP_TIME) {
+        this.app.ticker.remove(run);
+        v.destroy();
+      }
     };
-    const g = new Graphics().circle(x, y, r).stroke({ width: 10, color: tints[colour], alpha: 0.9 });
+    this.app.ticker.add(run);
+  }
+
+  /** Star splash at the popping duck — the shipped impact-star, duck-tinted. */
+  private burst(x: number, y: number, colour: Colour): void {
+    const s = new Sprite(this.starTex);
+    s.anchor.set(0.5);
+    s.position.set(x, y);
+    s.tint = BURST_TINTS[colour];
+    s.rotation = (x + y) % Math.PI; // vary the spike angles pop to pop
+    this.fx.addChild(s);
+    let t = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      const k = Math.min(1, t / 0.26);
+      // fast out, slow settle. The 289px star ends ~115px across — a shade wider
+      // than the 92px duck, like the reference splash; bigger just smears.
+      const e = 1 - (1 - k) * (1 - k);
+      s.scale.set(0.16 + 0.24 * e);
+      // hold full while the duck is still blowing up, then fade
+      s.alpha = k < 0.35 ? 1 : 1 - (k - 0.35) / 0.65;
+      if (k >= 1) {
+        this.app.ticker.remove(anim);
+        s.destroy();
+      }
+    };
+    this.app.ticker.add(anim);
+  }
+
+  private flashBlast(x: number, y: number, r: number, colour: Colour): void {
+    // secondary now: barrel-damage feedback behind the rig's explode vfx
+    const g = new Graphics().circle(x, y, r).stroke({ width: 10, color: TINTS[colour], alpha: 0.5 });
     this.fx.addChild(g);
     let t = 0;
     const anim = (tk: { deltaMS: number }): void => {
@@ -245,9 +389,8 @@ export class GameScene {
    * X where the path dead-ends into nothing, and a white billiards deflection
    * streak off a struck duck. The X is advisory — release still fires.
    */
-  private drawAim(): void {
+  private drawAim(pv: AimPreview | null): void {
     this.aimLine.clear();
-    const pv = this.director.slingshot.preview();
     if (!pv) return;
 
     // --- dots along the polyline ---
