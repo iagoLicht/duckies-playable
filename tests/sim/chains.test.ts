@@ -108,10 +108,14 @@ describe('same-colour matches, fuses and chain blasts', () => {
     const w = new World(1);
     const a = w.spawnDuck('red', 300, 700);
     w.spawnDuck('red', 393, 700);
-    // third red parked well inside BLAST_R of where the pair goes off
-    const c = w.spawnDuck('red', 380, 810);
-    // green bystander in the same blast — colour still gates the chain
-    const green = w.spawnDuck('green', 300, 810);
+    // Blast reach is pure centre distance (135, no body-radius padding), and the
+    // shooter drifts through its fuse before popping at (301.1, 700) — so the
+    // bystanders are placed against that pop point, one lane-width clear of the
+    // ducks' path at y = 700 so neither is knocked about on the way through.
+    // third red parked well inside BLAST_R of where the pair goes off (117 away)
+    const c = w.spawnDuck('red', 340, 810);
+    // green bystander in the same blast (128 away) — colour still gates the chain
+    const green = w.spawnDuck('green', 235, 810);
     w.launch(a.id, 140, 0);
     const log = record(w, 400);
 
@@ -130,12 +134,17 @@ describe('same-colour matches, fuses and chain blasts', () => {
 
   it('blasts damage barrels of any colour in radius', () => {
     const w = new World(1);
-    // straddles both pop points: the struck duck drifts on for a full fuse
-    // before it goes off, so it detonates well clear of the contact point
-    const barrel = w.spawnBarrel('purple', 414, 850, 3);
+    // Straddles both pop points. Blast reach is pure centre distance (135), so
+    // the barrel must sit inside both pop discs while staying clear of the lane
+    // the ducks run down — a direct hit would damage it as well. The struck duck
+    // is shot hard enough to rebound off the far wall and come most of the way
+    // back inside its fuse, putting the two pop points ~100 apart at (301.8, 700)
+    // and (403.4, 700); the barrel tucks under their midpoint, 115 below the lane
+    // (clear of DUCK_R + BARREL_R = 106) and ~126 from each pop point.
+    const barrel = w.spawnBarrel('purple', 353, 815, 3);
     const a = w.spawnDuck('red', 300, 700);
     w.spawnDuck('red', 393, 700);
-    w.launch(a.id, 140, 0);
+    w.launch(a.id, 533, 0);
     record(w, 200);
     expect(barrel.hp).toBe(1); // one hit from each of the pair's two blasts
   });

@@ -204,17 +204,20 @@ export class World {
    * Detonation: same-colour ducks in radius get a FRESH fuse rather than an
    * instant pop, so each chain generation costs one full fuse. Barrels take a
    * hit regardless of colour.
+   *
+   * Reach is pure CENTRE distance <= BLAST_R, with no body-radius padding, as
+   * the official's `explodeAt` does (decomp: `fr(r.pos, A) > s`, s = radius²).
    */
   blast(colour: Colour, x: number, y: number): void {
     this.events.push({ type: 'blast', colour, x, y, r: SIM.BLAST_R });
     for (const d of this.ducks) {
       if (d.colour !== colour || d.popping || d.matched) continue;
-      if (Math.hypot(d.x - x, d.y - y) <= SIM.BLAST_R + SIM.DUCK_R) {
+      if (Math.hypot(d.x - x, d.y - y) <= SIM.BLAST_R) {
         this.flagMatched(d);
       }
     }
     for (const b of [...this.barrels]) {
-      if (Math.hypot(b.x - x, b.y - y) <= SIM.BLAST_R + SIM.BARREL_R) {
+      if (Math.hypot(b.x - x, b.y - y) <= SIM.BLAST_R) {
         this.damageBarrel(b, 1);
       }
     }
