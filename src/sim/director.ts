@@ -1,6 +1,7 @@
 import { Slingshot } from './aim';
 import { SIM } from './config';
 import { LEVELS, type LevelDef } from './levels';
+import { predictShot } from './trajectory';
 import type { Colour, SimEvent } from './types';
 import { World } from './world';
 
@@ -12,6 +13,9 @@ import { World } from './world';
  * Failed  = the budget is spent, goals remain, and the board has come to rest
  *           (so a shot still in flight always gets to finish its chain first).
  */
+/** settled ticks before the board is examined for having no legal shot at all */
+const DEAD_BOARD_GRACE = 30;
+
 export class Director {
   readonly world: World;
   readonly slingshot: Slingshot;
@@ -25,6 +29,8 @@ export class Director {
   movesLeft: number;
   private destroyed = 0;
   private respawnAt: number | null = null;
+  /** consecutive settled ticks — the dead-board check only runs after a pause */
+  private deadBoardTicks = 0;
 
   constructor(seed: number, levelIndex = 0) {
     this.levelIndex = levelIndex;
@@ -111,12 +117,50 @@ export class Director {
     return !this.world.ducks.some((d) => d.live || d.matched || d.vx !== 0 || d.vy !== 0);
   }
 
+  /**
+   * Is there any shot the player could legally take? A release only fires when
+   * the guide reaches another duck, so a board can be *fully stocked* and still
+   * dead: statics between the ducks, every lane blocked. Counting ducks cannot
+   * see that, which is how a walled level soft-locks.
+   *
+   * Sampled rather than solved: a ring of directions per resting duck, which is
+   * what the player can actually try. Conservative by a hair (it may miss a
+   * bank shot that threads between two samples), and that is the right way to
+   * be wrong — the cost of a false alarm is one extra duck.
+   */
+  private anyLegalShot(): boolean {
+    const STEPS = 48; // every 7.5 degrees
+    for (const d of this.world.ducks) {
+      if (d.live || d.popping || d.matched) continue;
+      for (let i = 0; i < STEPS; i++) {
+        const a = (i / STEPS) * Math.PI * 2;
+        const dir = { x: Math.cos(a), y: Math.sin(a) };
+        if (predictShot(this.world, d, dir).hitKind === 'duck') return true;
+      }
+    }
+    return false;
+  }
+
   private handleRespawns(): void {
     if (this.won || this.failed) return;
     let target = this.level.targetDucks;
     // a shot is only valid aimed at another duck, so one duck alone is a
     // softlock — the field must never settle below two
     if (this.world.ducks.length < 2) target = Math.max(target, 2);
+    // …and a stocked board can be just as dead if nothing has a line. Only
+    // worth asking once everything has come to rest, and cheap at that rate.
+    if (this.world.ducks.length >= target && this.boardSettled() && !this.slingshot.aiming) {
+      this.deadBoardTicks++;
+      if (this.deadBoardTicks >= DEAD_BOARD_GRACE && !this.anyLegalShot()) {
+        this.deadBoardTicks = 0;
+        const spot = this.freeSpot();
+        const colours: Colour[] = ['yellow', 'green', 'purple', 'red'];
+        this.world.spawnDuck(colours[Math.floor(this.world.rng() * colours.length)]!, spot.x, spot.y);
+        return;
+      }
+    } else {
+      this.deadBoardTicks = 0;
+    }
     if (this.world.ducks.length >= target) {
       this.respawnAt = null;
       return;
