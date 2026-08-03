@@ -791,7 +791,9 @@ export class GameScene {
 
   private addBarrel(b: Barrel): void {
     const s = makeSpine(this.crateData);
-    s.skeleton.setSkinByName(b.skin);
+    // every crate is the plain wooden one except the finale's prize, which wears
+    // the rig's gold-toned skin so the last goal is the one you can see coming
+    s.skeleton.setSkinByName(b.golden ? 'yellow' : b.skin);
     s.skeleton.setSlotsToSetupPose();
     s.state.setAnimation(0, stageFor(b), false);
     s.scale.set(BARREL_SCALE);
