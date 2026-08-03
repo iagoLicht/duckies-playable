@@ -1,4 +1,9 @@
 import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
+// static (not dynamic) on purpose: spine-pixi-v8 registers its render pipe as a
+// pixi extension at module load, which must happen BEFORE app.init() collects
+// pipes — a dynamic import after init leaves renderPipes['spine'] undefined in
+// dev (the single-file build masked this by evaluating everything up front)
+import { GameScene } from './game/scene';
 
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
@@ -214,7 +219,6 @@ async function boot(): Promise<void> {
   app.stage.addChild(tubFrame);
 
   // ── the live game: sim-driven entities, input, fx ────────────────────────
-  const { GameScene } = await import('./game/scene');
   const scene = new GameScene(app, 20260802);
   await scene.init();
 
