@@ -15,6 +15,10 @@ const COPY = [
   'entities/ducky/ducky.skel', 'entities/ducky/ducky.atlas',
   'entities/crate-round/crate-round.skel', 'entities/crate-round/crate-round.atlas',
   'entities/tutorial-hand/tutorial-hand.json', 'entities/tutorial-hand/tutorial-hand.atlas',
+  // manifest "Bumper (Oyster)": GameEntityBumper renders as this oyster
+  // (SpineAnimOnHit='bump'); skins normal/gold/baby. It is also the shell that
+  // spills pearl.png — our clams.
+  'entities/oyster/oyster.skel', 'entities/oyster/oyster.atlas',
   'sfx/clips/launch-pull.mp3', 'sfx/clips/launch-release.mp3',
   'sfx/clips/duck-bump.mp3', 'sfx/clips/duck-explode.mp3',
   'sfx/clips/match-collision.mp3', 'sfx/clips/merge-done.mp3',
@@ -28,6 +32,12 @@ const WEBP = [
   { src: 'entities/ducky/ducky.png', q: 82 },                       // atlas page — quality generous, it's the hero
   { src: 'entities/crate-round/crate-round.png', q: 80 },           // atlas page — THE barrel (game's ribbon-strip mechanic)
   { src: 'entities/tutorial-hand/tutorial-hand.png', q: 80 },       // atlas page
+  // atlas page — the clam. NOTE the source is oyster.ORIG.png: the pack's
+  // oyster.png is a 2x upscale (592x544) while the atlas declares size:296,272,
+  // so staging oyster.png makes loadSkeleton's page-size assertion throw and the
+  // clam never loads. oyster.orig.png is the page the atlas actually describes.
+  { src: 'entities/oyster/oyster.orig.png', out: 'entities/oyster/oyster.webp', q: 82 },
+  { src: 'entities/oyster/pearl.png', q: 88 },                      // manifest: "52x52 glossy pearl … the droppable pearl it spills"
   { src: 'theme/in-game-bg.png', q: 60 },                           // full-screen bg, flat art survives low q
   { src: 'icons/goal-Barrel.png', q: 75 },
   { src: 'icons/goal-DuckAll.png', q: 75 },
@@ -149,9 +159,10 @@ for (const rel of COPY) {
   console.log(`copy  ${rel.padEnd(58)} ${kb(size)}`);
 }
 
-for (const { src: rel, q } of WEBP) {
+for (const { src: rel, out: outRel, q } of WEBP) {
   const src = path.join(PACK, rel);
-  const out = path.join(OUT, rel.replace(/\.png$/, '.webp'));
+  // `out` only when the staged name differs from the source (see the clam)
+  const out = path.join(OUT, outRel ?? rel.replace(/\.png$/, '.webp'));
   ensureDir(out);
   const inSize = fs.statSync(src).size;
   await sharp(src).webp({ quality: q }).toFile(out);

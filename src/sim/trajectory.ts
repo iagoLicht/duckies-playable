@@ -10,10 +10,10 @@ import type { Duck } from './types';
 export interface AimPreview {
   /** polyline of the projected path: [start, ...] with 2 points (direct) or 3 (one wall bounce) */
   points: Array<{ x: number; y: number }>;
-  /** first duck or barrel the swept circle hits, or null. Only a 'duck' hit is
-   *  a valid shot — anything else draws the red X and refuses the release. */
+  /** first body the swept circle hits, or null. Only a 'duck' hit is a valid
+   *  shot — anything else draws the red X and refuses the release. */
   hitId: number | null;
-  hitKind: 'duck' | 'barrel' | null;
+  hitKind: 'duck' | 'barrel' | 'clam' | null;
   /** unit direction the STRUCK DUCK will travel after impact (billiards normal), null unless hitKind==='duck' */
   deflect: { x: number; y: number } | null;
 }
@@ -29,7 +29,7 @@ const WALL_NUDGE = 2;
 
 interface BodyHit {
   id: number;
-  kind: 'duck' | 'barrel';
+  kind: 'duck' | 'barrel' | 'clam';
   /** body centre — the struck body's position */
   cx: number;
   cy: number;
@@ -46,6 +46,12 @@ function bodyAt(world: World, shooter: Duck, x: number, y: number): BodyHit | nu
   for (const b of world.barrels) {
     if (Math.hypot(b.x - x, b.y - y) < SIM.DUCK_R + SIM.BARREL_R) {
       return { id: b.id, kind: 'barrel', cx: b.x, cy: b.y };
+    }
+  }
+  // clams are solid bumpers, open or shut — the guide has to stop on them
+  for (const c of world.clams) {
+    if (Math.hypot(c.x - x, c.y - y) < SIM.DUCK_R + SIM.CLAM_R) {
+      return { id: c.id, kind: 'clam', cx: c.x, cy: c.y };
     }
   }
   return null;

@@ -6,6 +6,10 @@ export const SIM = {
 
   DUCK_R: 46,
   BARREL_R: 60,
+  /** the oyster rig is 126x155; this is its solid bumper radius at scene scale */
+  CLAM_R: 56,
+  /** min approach speed for a duck to crack a clam (same bar as a match pop) */
+  CLAM_HIT_SPEED: 126,
 
   // ── movement, from the official example verbatim (decomp xr, at 90 px/unit).
   // Drag is v *= 1/(1 + DRAG·dt) per fixed step, banded: a fresh shot flies

@@ -1,103 +1,118 @@
 import { Slingshot } from './aim';
-import { LEVEL, SIM } from './config';
+import { SIM } from './config';
+import { LEVELS, type LevelDef } from './levels';
 import type { Colour, SimEvent } from './types';
 import { World } from './world';
 
 /**
- * Level orchestration: waves, barrel counter, duck respawns, aim-assist ramp,
- * and the rigged finale (golden barrel at 1hp -> respawns thin out to the
- * final PAIR: with duck-only shot validation one lone duck would be unaimable,
- * so the closing beat is slinging one duck into the other by the barrel).
+ * Runs one level of the campaign: builds the board, counts the shot budget down,
+ * tops the duck supply back up, and decides cleared vs failed.
+ *
+ * Cleared = every barrel destroyed and every clam cracked open.
+ * Failed  = the budget is spent, goals remain, and the board has come to rest
+ *           (so a shot still in flight always gets to finish its chain first).
  */
 export class Director {
   readonly world: World;
   readonly slingshot: Slingshot;
   /** events already drained from world.events by step() — kept for the view */
   drained: SimEvent[] = [];
-  wave = 0;
+  readonly levelIndex: number;
+  readonly level: LevelDef;
   won = false;
+  failed = false;
   finaleArmed = false;
+  movesLeft: number;
   private destroyed = 0;
   private respawnAt: number | null = null;
 
-  constructor(seed: number) {
+  constructor(seed: number, levelIndex = 0) {
+    this.levelIndex = levelIndex;
+    const def = LEVELS[levelIndex];
+    if (!def) throw new Error(`no level at index ${levelIndex}`);
+    this.level = def;
+    this.movesLeft = def.moves;
     this.world = new World(seed);
     this.slingshot = new Slingshot(this.world);
+    this.slingshot.assist = def.assist;
   }
 
+  /** goals: barrels to break plus clams to crack */
   get counter(): { done: number; total: number } {
-    return { done: this.destroyed, total: LEVEL.TOTAL_BARRELS };
+    const total = this.level.barrels.length + this.level.clams.length;
+    const opened = this.world.clams.filter((c) => c.open).length;
+    return { done: this.destroyed + opened, total };
   }
 
   start(): void {
-    for (const d of LEVEL.DUCKS) {
-      this.world.spawnDuck(d.colour as Colour, d.x, d.y);
+    for (const d of this.level.ducks) this.world.spawnDuck(d.colour, d.x, d.y);
+    for (const b of this.level.barrels) {
+      this.world.spawnBarrel('wood', b.x, b.y, b.hp, b.golden ?? false);
     }
-    this.startWave(1);
-    // present one consistent stream: the init spawns/waveStarted land in
-    // `drained` alongside the counter instead of leaking into the first step()
+    for (const c of this.level.clams) this.world.spawnClam(c.x, c.y, c.skin ?? 'normal');
+    // one consistent stream: the setup spawns land in `drained` alongside the
+    // level header instead of leaking into the first step()
     this.drained.push(...this.world.events.splice(0, this.world.events.length));
+    this.pushLocal({
+      type: 'levelStarted', index: this.levelIndex, name: this.level.name, moves: this.movesLeft,
+    });
     this.pushCounter();
-  }
-
-  private startWave(n: number): void {
-    this.wave = n;
-    const w = LEVEL.WAVES[n - 1];
-    if (!w) return;
-    for (const b of w.barrels) {
-      this.world.spawnBarrel(
-        b.skin, b.x, b.y, b.hp, (b as { golden?: boolean }).golden ?? false,
-      );
-    }
-    this.slingshot.assist = w.assist;
-    this.world.events.push({ type: 'waveStarted', wave: n });
+    this.pushLocal({ type: 'movesLeft', left: this.movesLeft });
   }
 
   step(dt: number): void {
     this.world.step(dt);
 
-    // drain world events, reacting to the ones the director cares about
     const evs = this.world.events.splice(0, this.world.events.length);
     this.drained.push(...evs); // causes first, then the reactions below
     for (const e of evs) {
+      if (e.type === 'duckLaunched') {
+        // only a real launch costs a move; a refused aim never reaches here
+        this.movesLeft = Math.max(0, this.movesLeft - 1);
+        this.pushLocal({ type: 'movesLeft', left: this.movesLeft });
+      }
       if (e.type === 'barrelDestroyed') {
         this.destroyed++;
-        this.pushLocal({ type: 'counter', done: this.destroyed, total: LEVEL.TOTAL_BARRELS });
+        this.pushCounter();
       }
+      if (e.type === 'clamOpened') this.pushCounter();
     }
 
-    if (!this.won && this.destroyed >= LEVEL.TOTAL_BARRELS) {
+    const goalsLeft = this.world.barrels.length > 0 || this.world.clams.some((c) => !c.open);
+    if (!this.won && !this.failed && !goalsLeft) {
       this.won = true;
+      this.pushLocal({ type: 'levelCleared', index: this.levelIndex, movesLeft: this.movesLeft });
       this.pushLocal({ type: 'won' });
     }
 
-    // wave advance
-    const waveDef = LEVEL.WAVES[this.wave - 1];
-    if (!this.won && waveDef && this.world.barrels.length === 0 && this.wave < LEVEL.WAVES.length) {
-      this.startWave(this.wave + 1);
+    // the budget only bites once everything has settled — a shot in flight, a
+    // burning fuse or a drifting blast victim still gets to finish the job
+    if (!this.won && !this.failed && this.movesLeft === 0 && goalsLeft && this.boardSettled()) {
+      this.failed = true;
+      this.pushLocal({ type: 'levelFailed', index: this.levelIndex });
     }
 
-    // finale arming: golden at 1hp
-    const golden = this.world.barrels.find((b) => b.golden);
-    if (!this.finaleArmed && golden && golden.hp === 1) {
+    // finale flourish: the last goal standing gets near-max assist
+    if (!this.finaleArmed && !this.won && this.counter.total - this.counter.done === 1) {
       this.finaleArmed = true;
-      this.slingshot.assist = LEVEL.ASSIST_FINALE;
+      this.slingshot.assist = Math.max(this.level.assist, 0.9);
       this.pushLocal({ type: 'finaleArmed' });
     }
 
-    this.handleRespawns(dt);
+    this.handleRespawns();
   }
 
-  private handleRespawns(_dt: number): void {
-    if (this.won) return;
-    const waveDef = LEVEL.WAVES[this.wave - 1];
-    if (!waveDef) return;
-    let target = waveDef.targetDucks as number;
-    if (this.finaleArmed) target = 2; // the "final pair" moment
+  /** nothing moving, no fuse burning, no pending pop */
+  boardSettled(): boolean {
+    return !this.world.ducks.some((d) => d.live || d.matched || d.vx !== 0 || d.vy !== 0);
+  }
+
+  private handleRespawns(): void {
+    if (this.won || this.failed) return;
+    let target = this.level.targetDucks;
     // a shot is only valid aimed at another duck, so one duck alone is a
     // softlock — the field must never settle below two
     if (this.world.ducks.length < 2) target = Math.max(target, 2);
-
     if (this.world.ducks.length >= target) {
       this.respawnAt = null;
       return;
@@ -116,20 +131,22 @@ export class Director {
   }
 
   private freeSpot(): { x: number; y: number } {
-    const R = LEVEL.DUCK_SPAWN_REGION;
+    const R = this.level.spawnRegion;
     for (let tries = 0; tries < 40; tries++) {
       const x = R.x0 + this.world.rng() * (R.x1 - R.x0);
       const y = R.y0 + this.world.rng() * (R.y1 - R.y0);
       const clear =
         this.world.ducks.every((d) => Math.hypot(d.x - x, d.y - y) > SIM.DUCK_R * 2.4) &&
-        this.world.barrels.every((b) => Math.hypot(b.x - x, b.y - y) > SIM.DUCK_R + SIM.BARREL_R + 8);
+        this.world.barrels.every((b) => Math.hypot(b.x - x, b.y - y) > SIM.DUCK_R + SIM.BARREL_R + 8) &&
+        this.world.clams.every((c) => Math.hypot(c.x - x, c.y - y) > SIM.DUCK_R + SIM.CLAM_R + 8);
       if (clear) return { x, y };
     }
     return { x: (R.x0 + R.x1) / 2, y: (R.y0 + R.y1) / 2 };
   }
 
   private pushCounter(): void {
-    this.pushLocal({ type: 'counter', done: this.destroyed, total: LEVEL.TOTAL_BARRELS });
+    const c = this.counter;
+    this.pushLocal({ type: 'counter', done: c.done, total: c.total });
   }
 
   private pushLocal(e: SimEvent): void {

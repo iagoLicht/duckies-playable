@@ -38,6 +38,22 @@ export interface Barrel {
   hitCooldown: number;
 }
 
+/**
+ * The clam (the pack's oyster rig). Starts shut and dormant; a duck striking it
+ * hard enough, or a blast reaching it, cracks it open and spills a pearl. It is
+ * solid at all times — open or shut it bounces ducks, because the rig is the
+ * game's bumper ("GameEntityBumper renders as this oyster", asset manifest).
+ */
+export interface Clam {
+  id: number;
+  kind: 'clam';
+  x: number;
+  y: number;
+  skin: 'normal' | 'gold' | 'baby';
+  /** false until a hard duck hit or a blast opens it */
+  open: boolean;
+}
+
 export type SimEvent =
   | { type: 'duckLaunched'; id: number }
   | { type: 'duckStopped'; id: number }
@@ -51,7 +67,16 @@ export type SimEvent =
   | { type: 'barrelDamaged'; id: number; hp: number }
   | { type: 'barrelDestroyed'; id: number; x: number; y: number }
   | { type: 'barrelSpawned'; barrel: Barrel }
-  | { type: 'waveStarted'; wave: number }
+  | { type: 'clamSpawned'; clam: Clam }
+  /** the clam took the hit and is cracking open (view plays the open sequence) */
+  | { type: 'clamOpened'; id: number; x: number; y: number }
+  /** the pearl it spills, released once the shell is open */
+  | { type: 'pearlReleased'; id: number; x: number; y: number }
+  | { type: 'bumperHit'; id: number; x: number; y: number }
+  | { type: 'levelStarted'; index: number; name: string; moves: number }
+  | { type: 'movesLeft'; left: number }
   | { type: 'counter'; done: number; total: number }
   | { type: 'finaleArmed' }
+  | { type: 'levelFailed'; index: number }
+  | { type: 'levelCleared'; index: number; movesLeft: number }
   | { type: 'won' };

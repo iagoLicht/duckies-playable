@@ -1,11 +1,11 @@
-import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
+import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import {
   Skin, type Attachment, type Color, type SkeletonData, type Spine,
 } from '@esotericsoftware/spine-pixi-v8';
 import { Director } from '../sim/director';
 import { SIM } from '../sim/config';
 import type { AimPreview } from '../sim/trajectory';
-import type { Barrel, Colour, Duck, SimEvent } from '../sim/types';
+import type { Barrel, Clam, Colour, Duck, SimEvent } from '../sim/types';
 import { loadSkeleton, makeSpine } from '../engine/spineLoader';
 
 import duckySkelUrl from '../assets/entities/ducky/ducky.skel';
@@ -14,6 +14,10 @@ import duckyPageUrl from '../assets/entities/ducky/ducky.webp';
 import crateSkelUrl from '../assets/entities/crate-round/crate-round.skel';
 import crateAtlasText from '../assets/entities/crate-round/crate-round.atlas?raw';
 import cratePageUrl from '../assets/entities/crate-round/crate-round.webp';
+import oysterSkelUrl from '../assets/entities/oyster/oyster.skel';
+import oysterAtlasText from '../assets/entities/oyster/oyster.atlas?raw';
+import oysterPageUrl from '../assets/entities/oyster/oyster.webp';
+import pearlUrl from '../assets/entities/oyster/pearl.webp';
 import handJsonUrl from '../assets/entities/tutorial-hand/tutorial-hand.json?url';
 import handAtlasText from '../assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
 import handPageUrl from '../assets/entities/tutorial-hand/tutorial-hand.webp';
@@ -22,9 +26,20 @@ import blobUrl from '../assets/vfx/explode-particle.webp';
 import aimDotUrl from '../assets/vfx/aim/aim-dot.webp';
 import touchBgUrl from '../assets/vfx/aim/aim-touch-bg.webp';
 import touchFrontUrl from '../assets/vfx/aim/aim-touch-front.webp';
+import platePageUrl from '../assets/ui/hud-currency-plate.webp';
+import goalIconUrl from '../assets/icons/goal-Barrel.webp';
+import cherryBombUrl from '../assets/fonts/cherry-bomb.woff2';
 
 const DUCK_SCALE = 0.9;
 const BARREL_SCALE = 0.85;
+/**
+ * The oyster rig's SHELL art (its `base` attachment) is 198x188 — the rig's
+ * 126x155 "size" is only the Spine editor viewport, and scaling to that reads
+ * half again too big on the water. This puts the shell at ~115px across, a
+ * shade over its 112px collision diameter, the same slight overhang the crate
+ * and duck art carry over their own bodies.
+ */
+const CLAM_SCALE = 0.58;
 
 const COLOURS: readonly Colour[] = ['yellow', 'green', 'purple', 'red'];
 const TINTS: Record<Colour, number> = {
@@ -71,6 +86,25 @@ const SPAWN_STAGGER = 0.055;
 const SPAWN_SCALE_TIME = 0.3;
 /** a random settled duck dances every 2.8s (official idle-flavor timer) */
 const DANCE_PERIOD = 2.8;
+
+// Clam spine tracks. The shell's state machine owns track 0 (inactive ->
+// bump-inactive -> bump -> idle); the water ring loops forever beside it, the
+// same split the ducks use.
+const CT_SHELL = 0;
+const CT_RIPPLE = 1;
+/** the official's bumper-hit burst tint on this rig */
+const CLAM_TINT = 0xFFB0D9;
+/** `bump-inactive`'s authored length — the react beat, before the lid lifts */
+const CLAM_REACT_TIME = 0.27;
+
+// the pearl the shell spills: a quick Back.easeOut pop, a short rise as it
+// fades in, then it hangs there breathing. It clears the shell's top rim
+// (~55px above centre) with just enough overlap to read as coming out of it.
+const PEARL_POP_TIME = 0.25;
+const PEARL_RISE = 66;
+const PEARL_RISE_TIME = 0.45;
+const PEARL_BOB = 4;
+const PEARL_BOB_PERIOD = 2.4;
 
 /** Phaser's Back.easeOut, used by the official spawn pop-in */
 const backOut = (t: number): number => {
@@ -135,6 +169,20 @@ const AIM_PULL_MIN_T = 0.22;
  *  shows more than a moderate pull-back, so the scrub tops out early */
 const AIM_PULL_MAX_T = 0.65;
 
+// ── HUD ─────────────────────────────────────────────────────────────────────
+// Everything lives in the strip ABOVE the tub (main.ts puts the rim at y=200),
+// so the counters can never sit over the playfield. The plate is the pack's own
+// 291x116 currency plate and the type is its Cherry Bomb display face.
+/** the family name we register the woff2 under — the file's own is irrelevant */
+const HUD_FONT = 'CherryBomb';
+const HUD_ROW_Y = 112;
+const MOVES_X = 360;
+const MOVES_PLATE_SCALE = 0.72;
+const GOAL_X = 566;
+const GOAL_PLATE_SCALE = 0.5;
+/** the counter number punches this big for a beat whenever it changes */
+const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
+
 /** Decode an image URL (path or data URI) into a Pixi texture — same one code
  *  path for dev URLs and the build's inlined data URIs. */
 async function loadTexture(url: string): Promise<Texture> {
@@ -159,12 +207,17 @@ export class GameScene {
   readonly director: Director;
   private duckViews = new Map<number, Spine>();
   private barrelViews = new Map<number, Spine>();
+  private clamViews = new Map<number, Spine>();
   private layer = new Container();
   private fx = new Container();
+  /** counters, always on top and always above the tub rim */
+  private hud = new Container();
   private aimLine = new Graphics();
   private hand: Spine | null = null;
   private duckyData!: SkeletonData;
   private crateData!: SkeletonData;
+  private oysterData!: SkeletonData;
+  private pearlTex!: Texture;
   /** per-colour "duck + ring bones + aim bones" skin, built once (see init) */
   private duckSkins = new Map<Colour, Skin>();
   /** what each duck's ring track is showing: absent = nothing */
@@ -200,6 +253,9 @@ export class GameScene {
   private aimClock = 0;
   /** pointerId that owns the current grab — other pointers are ignored */
   private activePointer: number | null = null;
+  /** HUD readouts, built in init and driven purely by sim events */
+  private movesText!: Text;
+  private goalText!: Text;
 
   constructor(private app: Application, seed: number) {
     this.director = new Director(seed);
@@ -212,8 +268,12 @@ export class GameScene {
     this.crateData = await loadSkeleton({
       skelUrl: crateSkelUrl, atlasText: crateAtlasText, pageUrl: cratePageUrl,
     });
+    this.oysterData = await loadSkeleton({
+      skelUrl: oysterSkelUrl, atlasText: oysterAtlasText, pageUrl: oysterPageUrl,
+    });
     this.starTex = await loadTexture(starUrl);
     this.blobTex = await loadTexture(blobUrl);
+    this.pearlTex = await loadTexture(pearlUrl);
 
     // aim UI: official aim-dot sprites + the red contact crescent, all layered
     // UNDER the ducks (the official parks dots/cross at depth 6-8.5, ducks at 10+,
@@ -238,7 +298,8 @@ export class GameScene {
     this.crescent.addChild(cb, cf);
     this.crescent.visible = false;
     this.aimUnder.addChild(this.aimLine, this.crescent);
-    this.app.stage.addChild(this.aimUnder, this.layer, this.fx);
+    this.app.stage.addChild(this.aimUnder, this.layer, this.fx, this.hud);
+    await this.buildHud();
 
     // The rig's `active-ring` and `aim` skins ship ZERO attachments — they exist
     // to carry BONES (the circular selection ring's, and the drag teardrop's).
@@ -280,8 +341,13 @@ export class GameScene {
     stage.hitArea = { contains: () => true };
     stage.on('pointerdown', (e) => {
       if (this.activePointer !== null) return; // a grab is in flight — ignore extra fingers
+      // the move budget is binding: with the last shot spent (or the level
+      // already decided) the board is read-only — refuse before the sim ever
+      // sees a grab, so no launch can slip past and drive movesLeft negative
+      const d = this.director;
+      if (d.movesLeft === 0 || d.won || d.failed) return;
       const p = e.getLocalPosition(stage);
-      if (!this.director.slingshot.begin(p.x, p.y)) return;
+      if (!d.slingshot.begin(p.x, p.y)) return;
       // a duck waiting in the spawn queue has no view yet: refuse the grab
       // rather than let the player sling an invisible duck
       const grabbed = this.director.slingshot.pull?.duck.id;
@@ -553,8 +619,43 @@ export class GameScene {
         this.crateBreak(e.x, e.y);
         break;
       }
+      case 'clamSpawned':
+        this.addClam(e.clam);
+        break;
+      case 'clamOpened':
+        this.openClamView(e.id);
+        break;
+      case 'pearlReleased': {
+        // the sim spills the pearl on the same tick it cracks the shell; hold it
+        // back through the react beat so it emerges as the lid actually lifts
+        // instead of sprouting out of a still-closed clam
+        const { x, y } = e;
+        this.after(CLAM_REACT_TIME, () => this.releasePearl(x, y));
+        break;
+      }
+      case 'bumperHit':
+        // fires on every glancing contact, so it stays to one cheap star
+        this.burst(e.x, e.y, CLAM_TINT, 0.5);
+        break;
+      case 'levelStarted':
+        console.log(`level ${e.index + 1}: ${e.name} — ${e.moves} moves`);
+        break;
+      case 'movesLeft':
+        this.setCounter(this.movesText, String(e.left));
+        break;
+      case 'counter':
+        this.setCounter(this.goalText, `${e.done}/${e.total}`);
+        break;
+      case 'levelCleared':
+        console.log(`level ${e.index + 1} CLEARED with ${e.movesLeft} moves to spare`);
+        this.celebrate();
+        break;
+      case 'levelFailed':
+        console.log(`level ${e.index + 1} FAILED — out of moves`);
+        this.lament();
+        break;
       default:
-        break; // counter/waveStarted/finaleArmed/won get UI in Phase C
+        break; // finaleArmed/won ride on levelCleared; end-card UI is a later change
     }
   }
 
@@ -642,6 +743,87 @@ export class GameScene {
   }
 
   /**
+   * A shut, dormant clam. `inactive` is a ZERO-length pose animation: it swaps
+   * the shell to its shut attachment set (eye/eye2 off, the dormant eye3/eye4
+   * on, plus the `inactive-overlay2` closed-shell plate) and, being a completed
+   * non-looping entry, simply holds that set until something opens it. The
+   * water ring rides its own looping track exactly like the ducks'.
+   */
+  private addClam(c: Clam): void {
+    const s = makeSpine(this.oysterData);
+    s.skeleton.setSkinByName(c.skin);
+    s.skeleton.setSlotsToSetupPose();
+    s.state.setAnimation(CT_SHELL, 'inactive', false);
+    // desync the ring the way the ducks do so neighbouring clams don't pulse in
+    // lockstep — but on the TRACK, not the whole state: the shell's one-shots
+    // must keep true speed, since the pearl is timed against their real length
+    s.state.setAnimation(CT_RIPPLE, 'ripple', true).timeScale = 0.85 + (c.id % 5) * 0.08;
+    s.scale.set(CLAM_SCALE);
+    s.position.set(c.x, c.y);
+    this.layer.addChild(s);
+    this.clamViews.set(c.id, s);
+  }
+
+  /**
+   * The crack-open beat, all of it the rig's own authored animation:
+   *   `bump-inactive` (0.27s) — the react. Same shut attachment set, the
+   *      `oyster` bone squashed: it jolts but stays closed.
+   *   `bump` (0.30s) — the opening. It re-attaches the `face-up` lid at t=0,
+   *      fades it to 0.34 alpha and REMOVES it (and `mouth-bottom`) at 0.30,
+   *      bringing eye/eye2 back at 0.27. Net: the lid comes off, eyes pop.
+   *   `idle` (loop) — the awake shell breathing.
+   *
+   * `bump` only touches those four slots, so coming straight out of the shut
+   * set it would leave the closed-shell overlay and the dormant eyes stranded
+   * on top of the opening. The setup pose IS the awake set (face-up and
+   * mouth-bottom detached, eye/eye2 attached, no overlay), so each one-shot
+   * hands over through a setSlotsToSetupPose() on its `complete` — before the
+   * next animation is applied, since AnimationState drains its event queue
+   * inside update() and the skeleton is only posed afterwards, in apply().
+   * The same call on `bump`'s completion is the belt-and-braces guarantee that
+   * the lid is gone even if the final attachment frame never lands.
+   */
+  private openClamView(id: number): void {
+    const v = this.clamViews.get(id);
+    if (!v) return;
+    const awake = { complete: (): void => v.skeleton.setSlotsToSetupPose() };
+    v.state.setAnimation(CT_SHELL, 'bump-inactive', false).listener = awake;
+    v.state.addAnimation(CT_SHELL, 'bump', false, 0).listener = awake;
+    v.state.addAnimation(CT_SHELL, 'idle', true, 0);
+  }
+
+  /**
+   * The pearl the shell spills: the pack's 52x52 glossy bead, popped in with
+   * the official's Back overshoot, rising clear of the shell as it fades up,
+   * then left breathing on the water. It lives in `fx` so it sits above the
+   * clam. Paired with the bumper's pink star and a foam bloom at the seam.
+   */
+  private releasePearl(x: number, y: number): void {
+    this.burst(x, y, CLAM_TINT, 0.8);
+    this.foamFlash(x, y, CLAM_TINT);
+    const p = new Sprite(this.pearlTex);
+    p.anchor.set(0.5);
+    p.position.set(x, y);
+    p.scale.set(0);
+    p.alpha = 0;
+    this.fx.addChild(p);
+    let t = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      p.scale.set(backOut(Math.min(1, t / PEARL_POP_TIME)));
+      p.alpha = Math.min(1, t / PEARL_POP_TIME);
+      const rise = quadOut(Math.min(1, t / PEARL_RISE_TIME)) * PEARL_RISE;
+      // once the rise is spent the bob takes over from exactly where it ended,
+      // so there is no seam between the two
+      const bob = t < PEARL_RISE_TIME
+        ? 0
+        : PEARL_BOB * (1 - Math.cos(((t - PEARL_RISE_TIME) / PEARL_BOB_PERIOD) * Math.PI * 2)) / 2;
+      p.y = y - rise + bob;
+    };
+    this.app.ticker.add(anim);
+  }
+
+  /**
    * The duck's own death animation: `explode` is a 0-length pose that blows the
    * head up, `explode_vfx` then scales the whole rig out over 0.17s. The view has
    * already left duckViews (its sim duck is gone, so syncViews can't position or
@@ -721,10 +903,15 @@ export class GameScene {
 
   /** Additive duck-tinted bloom at the pop — the official's `foam` flash. */
   private popFlash(x: number, y: number, colour: Colour): void {
+    this.foamFlash(x, y, TINTS[colour]);
+  }
+
+  /** The bloom itself, at any tint — the clam's pearl uses the bumper pink. */
+  private foamFlash(x: number, y: number, tint: number): void {
     const s = new Sprite(this.blobTex);
     s.anchor.set(0.5);
     s.blendMode = 'add';
-    s.tint = TINTS[colour];
+    s.tint = tint;
     s.position.set(x, y);
     this.fx.addChild(s);
     let t = 0;
@@ -877,6 +1064,134 @@ export class GameScene {
     this.app.ticker.add(anim);
   }
 
+  /**
+   * The counters, built from the pack's own UI: the 291x116 currency plate as
+   * the backing for both chips, the goal-Barrel icon overlapping the goal chip
+   * the way the real HUD hangs its icons, and Cherry Bomb for the type.
+   *
+   * The whole row is pinned to the strip above the tub rim (y=200 in main.ts),
+   * so it can never sit over live water.
+   */
+  private async buildHud(): Promise<void> {
+    // Pixi rasterises text through the DOM's font set, so the face has to be
+    // registered AND fully loaded before the first Text exists — a Text built
+    // a frame early bakes a fallback-font texture and never re-renders itself.
+    document.fonts.add(await new FontFace(HUD_FONT, `url("${cherryBombUrl}")`).load());
+
+    const plateTex = await loadTexture(platePageUrl);
+    const chip = (x: number, scale: number): Sprite => {
+      const s = new Sprite(plateTex);
+      s.anchor.set(0.5);
+      s.scale.set(scale);
+      s.position.set(x, HUD_ROW_Y);
+      return s;
+    };
+    const label = (size: number, stroke: number): Text => {
+      const t = new Text({
+        text: '',
+        style: {
+          fontFamily: HUD_FONT, fontSize: size, fill: 0xffffff, align: 'center',
+          stroke: { color: 0x2f2440, width: stroke, join: 'round' },
+        },
+      });
+      t.anchor.set(0.5);
+      return t;
+    };
+
+    const movesLabel = label(28, 6);
+    movesLabel.text = 'MOVES';
+    movesLabel.position.set(MOVES_X, HUD_ROW_Y - 68);
+    this.movesText = label(54, 8);
+    this.movesText.position.set(MOVES_X, HUD_ROW_Y);
+
+    const goalIcon = new Sprite(await loadTexture(goalIconUrl));
+    goalIcon.anchor.set(0.5);
+    goalIcon.width = goalIcon.height = 66;
+    goalIcon.position.set(GOAL_X - 58, HUD_ROW_Y - 2);
+    this.goalText = label(34, 6);
+    this.goalText.position.set(GOAL_X + 20, HUD_ROW_Y);
+
+    this.hud.addChild(
+      chip(MOVES_X, MOVES_PLATE_SCALE), movesLabel, this.movesText,
+      chip(GOAL_X, GOAL_PLATE_SCALE), goalIcon, this.goalText,
+    );
+  }
+
+  /** Set a counter and punch it, so a spent move or a cleared goal is felt. */
+  private setCounter(t: Text, value: string): void {
+    if (t.text === value) return;
+    t.text = value;
+    let e = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      e += tk.deltaMS / 1000;
+      // out then back, Quad.easeOut each leg — the duck punch's shape
+      const leg = e < HUD_PUNCH_TIME ? e / HUD_PUNCH_TIME : 1 - (e - HUD_PUNCH_TIME) / HUD_PUNCH_TIME;
+      t.scale.set(1 + (HUD_PUNCH - 1) * quadOut(Math.max(0, leg)));
+      if (e >= HUD_PUNCH_TIME * 2) {
+        this.app.ticker.remove(anim);
+        t.scale.set(1);
+      }
+    };
+    this.app.ticker.add(anim);
+  }
+
+  /**
+   * Level cleared. No end-card and no transition — a later change owns those;
+   * this only has to make the state unmistakable: a staggered wash of stars
+   * over the tub and a longer version of the pop's own camera shake.
+   */
+  private celebrate(): void {
+    this.shake = SHAKE_TIME * 4;
+    // a ring of stars blooming outward from the middle of the tub, alternating
+    // the pop's warm white with the clam's pink
+    for (let i = 0; i < 8; i++) {
+      this.after(i * 0.07, () => {
+        const a = (i / 8) * Math.PI * 2 + 0.4;
+        this.burst(
+          DESIGN_W / 2 + Math.cos(a) * 210, 740 + Math.sin(a) * 250,
+          i % 2 === 0 ? POP_STAR_TINT : CLAM_TINT, 1.3,
+        );
+      });
+    }
+  }
+
+  /**
+   * Level failed: deliberately the opposite shape — no stars, no shake, one
+   * slow cold ring sinking over the board that nobody could mistake for a win.
+   */
+  private lament(): void {
+    const x = DESIGN_W / 2, y = 740;
+    const g = new Graphics().circle(x, y, 90).stroke({ width: 14, color: 0x2f5f80, alpha: 0.55 });
+    this.fx.addChild(g);
+    let t = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      const p = Math.min(1, t / 0.6);
+      g.alpha = 1 - p;
+      g.scale.set(1 + quadOut(p) * 1.6);
+      g.pivot.set((x * (g.scale.x - 1)) / g.scale.x, (y * (g.scale.y - 1)) / g.scale.y);
+      if (p >= 1) {
+        this.app.ticker.remove(anim);
+        g.destroy();
+      }
+    };
+    this.app.ticker.add(anim);
+    this.foamFlash(x, y, 0x3d6f8f);
+  }
+
+  /** Run `fn` once, `delay` seconds out, on the app ticker — the file's only
+   *  scheduler, so anything queued pauses with the tab like the rest of the fx. */
+  private after(delay: number, fn: () => void): void {
+    let t = 0;
+    const wait = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      if (t < delay) return;
+      this.app.ticker.remove(wait);
+      fn();
+    };
+    this.app.ticker.add(wait);
+  }
+
   private syncViews(dt: number): void {
     for (const d of this.director.world.ducks) {
       const v = this.duckViews.get(d.id);
@@ -887,6 +1202,9 @@ export class GameScene {
       }
     }
     for (const [, v] of this.barrelViews) v.update(dt);
+    // clams never move, but the shut pose, the open beats and the water ring
+    // all need ticking (autoUpdate is off on every rig in this scene)
+    for (const [, v] of this.clamViews) v.update(dt);
     if (this.hand?.visible) this.hand.update(dt);
   }
 

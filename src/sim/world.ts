@@ -1,7 +1,7 @@
 import { SIM } from './config';
 import { mulberry32, type Rng } from './rng';
 import { collideCircle } from './shapes';
-import type { Barrel, Colour, Duck, SimEvent } from './types';
+import type { Barrel, Clam, Colour, Duck, SimEvent } from './types';
 
 /**
  * Pure simulation world. Deterministic: all randomness via the seeded rng,
@@ -12,6 +12,7 @@ export class World {
   readonly rng: Rng;
   readonly ducks: Duck[] = [];
   readonly barrels: Barrel[] = [];
+  readonly clams: Clam[] = [];
   readonly events: SimEvent[] = [];
   time = 0;
   /** 0 while a fresh shot flies untouched (light drag); 1 after its first contact */
@@ -43,6 +44,24 @@ export class World {
     this.barrels.push(b);
     this.events.push({ type: 'barrelSpawned', barrel: b });
     return b;
+  }
+
+  spawnClam(x: number, y: number, skin: Clam['skin'] = 'normal'): Clam {
+    const c: Clam = { id: this.nextId++, kind: 'clam', x, y, skin, open: false };
+    this.clams.push(c);
+    this.events.push({ type: 'clamSpawned', clam: c });
+    return c;
+  }
+
+  /**
+   * Crack a clam open and spill its pearl. Idempotent: a clam opens once, then
+   * stays a plain bumper for the rest of the level.
+   */
+  openClam(c: Clam): void {
+    if (c.open) return;
+    c.open = true;
+    this.events.push({ type: 'clamOpened', id: c.id, x: c.x, y: c.y });
+    this.events.push({ type: 'pearlReleased', id: c.id, x: c.x, y: c.y });
   }
 
   launch(id: number, vx: number, vy: number): void {
@@ -106,6 +125,7 @@ export class World {
       this.collideWalls();
       this.collideDuckPairs();
       this.collideDuckBarrels();
+      this.collideDuckClams();
     }
 
     this.tickFuses();
@@ -268,6 +288,34 @@ export class World {
     }
   }
 
+  /**
+   * Clams are solid bumpers whether open or shut (the rig IS the game's bumper),
+   * so this always bounces. A hard enough approach — the same speed bar a match
+   * needs — additionally cracks a shut one open, mirroring the official's
+   * `caseContact`: bounce off static, then hit the case if the approach was fast.
+   */
+  private collideDuckClams(): void {
+    for (const d of this.ducks) {
+      for (const c of this.clams) {
+        const dx = d.x - c.x, dy = d.y - c.y;
+        const dist = Math.hypot(dx, dy);
+        const minD = SIM.DUCK_R + SIM.CLAM_R;
+        if (dist >= minD || dist === 0) continue;
+        const nx = dx / dist, ny = dy / dist;
+        d.x = c.x + nx * minD;
+        d.y = c.y + ny * minD;
+        if (this.phase === 0) this.phase = 1;
+        const vn = d.vx * nx + d.vy * ny;
+        if (vn < 0) {
+          d.vx -= (1 + SIM.RESTITUTION_STATIC) * vn * nx;
+          d.vy -= (1 + SIM.RESTITUTION_STATIC) * vn * ny;
+          this.events.push({ type: 'bumperHit', id: c.id, x: d.x, y: d.y });
+        }
+        if (vn < -SIM.CLAM_HIT_SPEED) this.openClam(c);
+      }
+    }
+  }
+
   damageBarrel(b: Barrel, amount: number): void {
     if (b.hp <= 0) return;
     b.hp = Math.max(0, b.hp - amount);
@@ -317,6 +365,10 @@ export class World {
       if (Math.hypot(b.x - x, b.y - y) <= SIM.BLAST_R) {
         this.damageBarrel(b, 1);
       }
+    }
+    // the official's explodeAt opens cases caught in the blast too
+    for (const c of this.clams) {
+      if (Math.hypot(c.x - x, c.y - y) <= SIM.BLAST_R) this.openClam(c);
     }
   }
 }
