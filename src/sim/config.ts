@@ -13,8 +13,7 @@ export const SIM = {
 
   GRAB_R: 80,           // pointer-to-duck pickup radius
   MIN_PULL: 25,         // below this, release is a whiff (no shot)
-  MAX_PULL: 200,
-  LAUNCH_K: 7.0,        // launch speed = pull-length * LAUNCH_K
+  LAUNCH_SPEED: 1200,   // fixed launch speed — drag sets direction only (official-example mechanic)
 
   POP_SPEED: 120,       // min relative speed for a same-colour pair pop
   BARREL_HIT_SPEED: 90, // min impact speed for a direct hit to damage a barrel

@@ -44,17 +44,29 @@ describe('Slingshot', () => {
     expect(d.live).toBe(true);
     expect(d.vy).toBeLessThan(0); // fires up
     expect(Math.abs(d.vx)).toBeLessThan(1);
-    expect(Math.hypot(d.vx, d.vy)).toBeCloseTo(150 * SIM.LAUNCH_K, 0);
+    expect(Math.hypot(d.vx, d.vy)).toBeCloseTo(SIM.LAUNCH_SPEED, 0);
   });
 
-  it('pull length is clamped at MAX_PULL', () => {
-    const w = new World(1);
-    const d = w.spawnDuck('red', 300, 700);
-    const s = new Slingshot(w);
-    s.begin(300, 700);
-    s.move(300, 700 + 500);
-    s.end();
-    expect(Math.hypot(d.vx, d.vy)).toBeCloseTo(SIM.MAX_PULL * SIM.LAUNCH_K, 0);
+  it('launch speed is fixed regardless of pull length', () => {
+    const short = new World(1);
+    const ds = short.spawnDuck('red', 300, 700);
+    const ss = new Slingshot(short);
+    ss.begin(300, 700);
+    ss.move(300, 760); // 60px pull
+    expect(ss.end()).toBe(true);
+
+    const long = new World(1);
+    const dl = long.spawnDuck('red', 300, 700);
+    const sl = new Slingshot(long);
+    sl.begin(300, 700);
+    sl.move(300, 1200); // 500px pull
+    expect(sl.end()).toBe(true);
+
+    const speedShort = Math.hypot(ds.vx, ds.vy);
+    const speedLong = Math.hypot(dl.vx, dl.vy);
+    expect(speedShort).toBeCloseTo(SIM.LAUNCH_SPEED, 0);
+    expect(speedLong).toBeCloseTo(SIM.LAUNCH_SPEED, 0);
+    expect(speedShort).toBeCloseTo(speedLong, 6);
   });
 
   it('aim assist bends the shot toward a same-colour duck inside the cone', () => {

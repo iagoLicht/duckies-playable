@@ -4,8 +4,9 @@ import type { Duck } from './types';
 
 /**
  * Pull-back slingshot: begin() on/near a duck, move() drags the pointer away,
- * end() fires opposite the pull. Aim assist bends the launch direction toward
- * the best target (same-colour duck or any barrel) within the assist cone.
+ * end() fires opposite the pull at a fixed speed; the drag sets direction only.
+ * Aim assist bends the launch direction toward the best target (same-colour
+ * duck or any barrel) within the assist cone.
  */
 export class Slingshot {
   /** 0..1 — director raises this over the level */
@@ -67,13 +68,12 @@ export class Slingshot {
     const p = this.pull;
     this.duck = null;
     if (!p || p.len < SIM.MIN_PULL) return false;
-    const len = Math.min(p.len, SIM.MAX_PULL);
     let dx = p.dx / p.len;
     let dy = p.dy / p.len;
     const bent = this.applyAssist(p.duck, dx, dy);
     dx = bent.dx;
     dy = bent.dy;
-    this.world.launch(p.duck.id, dx * len * SIM.LAUNCH_K, dy * len * SIM.LAUNCH_K);
+    this.world.launch(p.duck.id, dx * SIM.LAUNCH_SPEED, dy * SIM.LAUNCH_SPEED);
     return true;
   }
 

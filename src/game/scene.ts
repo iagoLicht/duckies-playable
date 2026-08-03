@@ -234,11 +234,12 @@ export class GameScene {
     this.aimLine.clear();
     const p = this.director.slingshot.pull;
     if (!p || p.len < SIM.MIN_PULL) return;
-    // simple dotted line opposite the pull (placeholder for Phase C aim vfx)
-    const len = Math.min(p.len, SIM.MAX_PULL);
+    // dotted line opposite the pull (placeholder for Phase C aim vfx).
+    // Fixed length: the launch speed is fixed, so the drag shows direction only.
+    const AIM_LEN = 260;
     const ux = p.dx / (p.len || 1), uy = p.dy / (p.len || 1);
     for (let i = 1; i <= 8; i++) {
-      const f = (i / 8) * len * 2.2;
+      const f = (i / 8) * AIM_LEN;
       this.aimLine.circle(p.duck.x + ux * f, p.duck.y + uy * f, 7 - i * 0.5).fill({ color: 0xffffff, alpha: 0.85 });
     }
   }
