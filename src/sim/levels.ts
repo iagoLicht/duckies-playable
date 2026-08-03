@@ -49,6 +49,44 @@ export interface LevelDef {
  */
 export const FIELD = { x0: 46, y0: 220, x1: 674, y1: 1234, bumperY: 950 } as const;
 
+/**
+ * The campaign. Every `moves` below is MEASURED, not guessed: run
+ *
+ *     node tests/tools/tune-levels.mjs --seeds=150      (--level=N for one)
+ *
+ * which plays the shared distracted-thumb bot (tests/sim/bot.ts) over each board
+ * with the budget disabled and prints the shots-used percentiles. The run is
+ * deterministic — same seeds, same bot, same numbers — so a percentile quoted in
+ * a comment here can be reproduced exactly. Budget policy:
+ *
+ *  - level 1 (tutorial):    moves = p90 + 1   (must be very hard to lose)
+ *  - levels 2-3 (teaching): moves = p90
+ *  - levels 4-10:           moves = ceil(p75) — the near-miss band. The bot
+ *    clears ~3 runs in 4 inside it; a human aims far better than this bot and
+ *    usually lands with a shot or two spare, which is the feeling we want.
+ *    Never below p50: that is unwinnable, not tense.
+ *
+ * Length targets for the board itself: bot p50 <= 9 shots and p90 <= 16. A board
+ * that runs longer is a grind, and a grind is not tension. What the tuning pass
+ * established about *shortening* one:
+ *
+ *  - BARRELS ARE SOFT, so hp is a weak knob in both directions: a launched duck
+ *    ricochets and re-hits, and dropping an hp2 to hp1 typically buys under a
+ *    shot. Useful, rarely sufficient on its own.
+ *  - CLAMS ARE THE DIFFICULTY CURRENCY. They need a direct hit above
+ *    CLAM_HIT_SPEED or a blast centred within 135, and neither happens by
+ *    accident.
+ *  - WHAT ACTUALLY COSTS SHOTS IS DISTANCE AND SHADOW, not hit points. Goals
+ *    strung far apart, or parked under a clam that roofs them, are paid for one
+ *    at a time. The strongest single fix is to move goals into each other's
+ *    blast lens — two crates 120..152 apart, or a crate 175..234 from a clam —
+ *    so one well-placed pop retires two. That is how levels 4, 5, 7 and 8 came
+ *    down, with their geometry and their lesson intact.
+ *  - A goal cluster the ducks cannot REACH is the worst case of all (level 10):
+ *    three clams deep, no shot budget survives it. Letting respawns land in the
+ *    middle chamber, not just the top shelf, was worth more there than any hp
+ *    change.
+ */
 export const LEVELS: LevelDef[] = [
   // ── 1 ────────────────────────────────────────────────────────────────────
   // TEACH THE VERB. Open water, four barrels in two clean rows, a same-colour
@@ -83,12 +121,13 @@ export const LEVELS: LevelDef[] = [
   // path of every shot aimed down the board, with the two barrels parked behind
   // it so the natural follow-through carries on into them. The lesson is that a
   // clam is a target you *hit*, and that it kicks the duck back at you.
-  // Budget intent: 3 goals / 3 hits in 5 shots. Loose but no longer free — a
-  // player who spends two shots pinballing off the clam without cracking it
-  // will notice the counter.
+  // Budget intent: 3 goals / 3 hits in 9 shots. Still a teaching board, so the
+  // budget is the measured p90 — nine runs in ten of a mediocre bot fit inside
+  // it. A player who spends two shots pinballing off the clam without cracking
+  // it will notice the counter; a player who spends five will still get there.
   {
     name: 'Pearl Diver',
-    moves: 5,
+    moves: 9,
     assist: 0.6,
     targetDucks: 4,
     ducks: [
@@ -140,7 +179,7 @@ export const LEVELS: LevelDef[] = [
   },
 
   // ── 4 ────────────────────────────────────────────────────────────────────
-  // CLAMS AS DEFLECTORS. The two hp2 barrels are shoved right up against the
+  // CLAMS AS DEFLECTORS. The two wall barrels are shoved right up against the
   // side walls at y 640, in the dead angle where a straight duck-to-duck shot
   // from the spawn shelf can't reach them — but the high clam at (300,640) sits
   // on the line to the left one, and the low clam at (430,900) kicks anything
@@ -148,10 +187,17 @@ export const LEVELS: LevelDef[] = [
   // so the deflector you need is also the thing you must destroy: crack them too
   // early and you lose the aiming furniture (they stay solid, but the pearl and
   // the counter are gone and the level's remaining slack goes with it).
-  // Budget intent: 6 goals / 8 hits in 8 shots. The wall barrels are the tax.
+  //
+  // REBALANCE: the wall crates are hp1. They were hp2 and the dead angle made
+  // every second hit cost a whole shot — a tax the level charged twice for the
+  // same idea. Their awkward position IS the lesson; paying for it once is
+  // enough. The low pair also moved up off the floor to y1050, close enough that
+  // the low clam's blast lens overlaps both (175 and 234 apart, so a pop placed
+  // between clam and crate retires two goals) — the deflector now pays out.
+  // Budget intent: 6 goals / 6 hits in 11 shots.
   {
     name: 'Deflection',
-    moves: 8,
+    moves: 11,
     assist: 0.45,
     targetDucks: 4,
     ducks: [
@@ -161,10 +207,10 @@ export const LEVELS: LevelDef[] = [
       { colour: 'purple', x: 230, y: 540 },
     ],
     barrels: [
-      { x: 150, y: 640, hp: 2 },
-      { x: 590, y: 640, hp: 2 },
-      { x: 200, y: 1120, hp: 1 },
-      { x: 520, y: 1120, hp: 1 },
+      { x: 150, y: 640, hp: 1 },
+      { x: 590, y: 640, hp: 1 },
+      { x: 250, y: 1050, hp: 1 },
+      { x: 520, y: 1050, hp: 1 },
     ],
     clams: [
       { x: 300, y: 640 },
@@ -182,13 +228,19 @@ export const LEVELS: LevelDef[] = [
   // shot pops them up at y≈500, well short of the lens; you have to nudge one
   // green down into the throat first and match it on the next shot. Three
   // barrels wait underneath as the reward for punching through.
-  // Budget intent: 5 goals / 6 hits in 8 shots. Doing the clams one at a time
+  //
+  // REBALANCE: the corridor is untouched — it is the level — but the reward got
+  // cheaper to collect. The three crates are all hp1 now and sit 120 apart at
+  // 240/360/480, so a pop that settles above a gap (e.g. (300,990), 117 from
+  // each of two crates) takes a PAIR. Punching through used to buy you four
+  // more hits spread across the floor; it now buys the floor in two pops.
+  // Budget intent: 5 goals / 5 hits in 12 shots. Doing the clams one at a time
   // is survivable but leaves almost nothing for the barrels — that is the
   // near-miss. (Clams are the real difficulty currency: they need a direct fast
   // hit or a blast centred within 135, where a barrel just needs to be bumped.)
   {
     name: 'Twin Pearls',
-    moves: 8,
+    moves: 12,
     assist: 0.45,
     targetDucks: 3,
     ducks: [
@@ -198,9 +250,9 @@ export const LEVELS: LevelDef[] = [
       { colour: 'red', x: 200, y: 600 },
     ],
     barrels: [
-      { x: 180, y: 1090, hp: 1 },
-      { x: 360, y: 1090, hp: 2 },
-      { x: 540, y: 1090, hp: 1 },
+      { x: 240, y: 1090, hp: 1 },
+      { x: 360, y: 1090, hp: 1 },
+      { x: 480, y: 1090, hp: 1 },
     ],
     clams: [{ x: 240, y: 720 }, { x: 480, y: 720 }],
     spawnRegion: { x0: 140, y0: 340, x1: 580, y1: 580 },
@@ -208,17 +260,20 @@ export const LEVELS: LevelDef[] = [
 
   // ── 6 ────────────────────────────────────────────────────────────────────
   // ARMOUR. Two hp3 crates in the upper shoulders, an hp2 keystone dead centre,
-  // two hp1 stragglers low. Ten hits, nine shots: this cannot be brute-forced
+  // two hp1 stragglers low. Ten hits, eight shots: this cannot be brute-forced
   // one hit per shot, so the level is really asking "can you get a blast to
   // count twice?". The keystone at (360,900) is 256 from each hp3 — out of blast
   // range from either — but a duck that settles at roughly (330,790) is inside
   // BLAST_R of the keystone *and* of the left hp3. Finding those double-dip
   // positions three or four times over is the solve.
-  // Budget intent: 5 goals / 10 hits in 7 shots. Assist drops to 0.4 because
+  // Budget intent: 5 goals / 10 hits in 8 shots — still the sharpest
+  // hits-per-shot demand in the campaign, and the armour needed no rebalancing:
+  // this board already measured inside the length targets, so only the budget
+  // moved (to the measured p75, the near-miss band). Assist drops to 0.4 because
   // this is the first level that punishes a shot landing 40px off.
   {
     name: 'Ironclad',
-    moves: 7,
+    moves: 8,
     assist: 0.4,
     targetDucks: 5,
     ducks: [
@@ -246,11 +301,21 @@ export const LEVELS: LevelDef[] = [
   // low (0.4) precisely so a bank shot survives the aim bend instead of being
   // snapped back onto the nearest duck. The left clam doubles as the rail that
   // sends a duck into the left bumper.
-  // Budget intent: 6 goals / 8 hits in 9 shots, and at least two of those hits
+  //
+  // REBALANCE: all four crates are hp1 and pulled into a chain along the lip —
+  // 150/300/420/570, so every ADJACENT pair is 120..152 apart and one pop placed
+  // above a gap (e.g. (360,1010), 125 from both middle crates) takes two. A bank
+  // shot that arrives sideways now pays for two goals instead of chipping one
+  // crate twice, which is the fantasy the level was already selling.
+  // The low clam moved up from y880 to y800: sitting directly over the lip it
+  // shadowed the whole floor, and the bot burned shots bouncing off it into
+  // nothing. At 800 it still deflects into the right bumper — it just no longer
+  // roofs the crates it is supposed to feed.
+  // Budget intent: 6 goals / 6 hits in 11 shots, and at least two of those hits
   // really do want to arrive sideways.
   {
     name: 'Pinball',
-    moves: 9,
+    moves: 11,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -261,13 +326,13 @@ export const LEVELS: LevelDef[] = [
     ],
     barrels: [
       { x: 150, y: 1100, hp: 1 },
-      { x: 310, y: 1140, hp: 2 },
-      { x: 470, y: 1140, hp: 2 },
-      { x: 600, y: 1100, hp: 1 },
+      { x: 300, y: 1120, hp: 1 },
+      { x: 420, y: 1120, hp: 1 },
+      { x: 570, y: 1100, hp: 1 },
     ],
     clams: [
       { x: 170, y: 620 },
-      { x: 450, y: 880 },
+      { x: 450, y: 800 },
     ],
     spawnRegion: { x0: 150, y0: 340, x1: 580, y1: 560 },
   },
@@ -290,10 +355,19 @@ export const LEVELS: LevelDef[] = [
   // the far side with no duck-to-duck line, and since respawns only fire below
   // targetDucks the board can reach a state where no shot is legal at all. Keep
   // a lane open in any level that walls the board across.
-  // Budget intent: 6 goals / 10 hits in 9 shots, with the ordering forced.
+  //
+  // REBALANCE: the wall's GEOMETRY is untouched — 240/370/500 at y860, the same
+  // 10px of water between faces, the same sealed right end, the same 52px needle
+  // on the left. Only its price changed: the two end crates and the low corner
+  // crate are hp1, and the keystone at 370 keeps hp2 so the middle of the wall is
+  // still the expensive way in. Demolishing the wall used to cost six hits, and
+  // at that price it was no choice at all — you smashed, because you could not
+  // afford anything else. At four, "smash it" and "thread it" are genuinely
+  // competing plans, which is what the level is about.
+  // Budget intent: 6 goals / 7 hits in 11 shots, with the ordering forced.
   {
     name: 'The Vault',
-    moves: 9,
+    moves: 11,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -303,10 +377,10 @@ export const LEVELS: LevelDef[] = [
       { colour: 'green', x: 360, y: 560 },
     ],
     barrels: [
-      { x: 240, y: 860, hp: 2 },
+      { x: 240, y: 860, hp: 1 },
       { x: 370, y: 860, hp: 2 },
-      { x: 500, y: 860, hp: 2 },
-      { x: 180, y: 1120, hp: 2 },
+      { x: 500, y: 860, hp: 1 },
+      { x: 180, y: 1120, hp: 1 },
     ],
     clams: [
       { x: 480, y: 650 },
@@ -323,12 +397,13 @@ export const LEVELS: LevelDef[] = [
   // clearing this board is about aiming the *knock*, one generation at a time,
   // down the staircase to the hp3 keystone and the two low crates. Lowest assist
   // in the campaign (0.35) — the drift you want is measured in tens of pixels.
-  // Budget intent: 6 goals / 11 hits in 7 shots. Only multi-generation chains
-  // pay for that; a player trading one shot per hit runs out around the third
+  // Budget intent: 6 goals / 11 hits in 8 shots. Only multi-generation chains
+  // pay for that; a player trading one shot per hit runs out around the fourth
   // step, with the bottom row untouched and visible. Cruellest near-miss here.
+  // The staircase measured inside the length targets untouched — 8 is its p75.
   {
     name: 'The Gauntlet',
-    moves: 7,
+    moves: 8,
     assist: 0.35,
     targetDucks: 5,
     ducks: [
@@ -354,23 +429,40 @@ export const LEVELS: LevelDef[] = [
   // (360,560) guards the mouth of the board and splits the approach into two
   // 36px-wide lanes. Below it the twin clams at 260 apart repeat level 5's
   // trick, but tighter: the both-at-once lens is only ~73px tall now. Behind
-  // those, an hp2 keystone, two hp2 corner crates, and the golden hp3 barrel
-  // buried at (360,1130) — five barrel-radii and three clams deep, reachable
-  // only once the rest of the board has been dismantled. Because it is last,
+  // those, a keystone, two corner crates, and the golden barrel buried at
+  // (360,1130) — five barrel-radii and three clams deep, reachable only once the
+  // rest of the board has been dismantled. Because it is last,
   // Director.finaleArmed fires as it becomes the final goal and pushes assist to
   // 0.9, so the ad's closing shot is a guaranteed, gold-showering hit.
   // The three clams are mutually close enough (255, 255 and 260 apart) that ANY
   // pair of them can fall to one perfectly placed pop — three different two-for-
   // one routes, none of them wide. That is the finale's skill ceiling.
-  // Budget intent: 7 goals / 12 hits in 11 shots. The intended clear takes two
-  // clams with one pop and still arrives at the golden barrel on the last shot.
+  //
+  // REBALANCE: this board was the campaign's worst grind by a distance (bot p50
+  // 16, p90 30) and the reason was ACCESS, not armour. Everything worth shooting
+  // sits below three clams, respawns only ever landed on the top shelf, and shot
+  // after shot was spent re-arranging ducks that could not reach the cellar.
+  // Cutting hp alone did not fix it: 12 hits down to 8 still measured p90 22,
+  // and even 7 hits with no keystone sat at p90 19. Two other changes did:
+  //  - the spawn region now reaches y700, into the middle chamber between the
+  //    guard clam and the twins, so the board keeps feeding ducks to the side of
+  //    the maze that still has work left. This was worth more than every hp
+  //    change put together.
+  //  - targetDucks 6 (was 5) for the same reason: more ducks, more legal lines
+  //    through 36px lanes.
+  // The clam triangle is untouched — it IS the level — and so is the golden
+  // barrel's burial spot. Every crate is now hp1, the golden included: with
+  // finaleArmed at assist 0.9 the closing shot lands, and one hit ends the ad on
+  // the gold shower rather than three.
+  // Budget intent: 7 goals / 7 hits in 13 shots. The intended clear still takes
+  // two clams with one pop and arrives at the golden barrel on the last shot.
   {
     name: 'The Golden Pearl',
-    moves: 11,
+    moves: 13,
     assist: 0.4,
-    // 5: the three clams cut the tub into narrow lanes, so the board wants a
+    // 6: the three clams cut the tub into narrow lanes, so the board wants a
     // healthy duck population to guarantee a legal duck-to-duck line at all times
-    targetDucks: 5,
+    targetDucks: 6,
     ducks: [
       { colour: 'green', x: 200, y: 360 },
       { colour: 'green', x: 520, y: 360 },
@@ -378,16 +470,19 @@ export const LEVELS: LevelDef[] = [
       { colour: 'yellow', x: 180, y: 470 },
     ],
     barrels: [
-      { x: 360, y: 930, hp: 2 },
-      { x: 170, y: 1060, hp: 2 },
-      { x: 550, y: 1060, hp: 2 },
-      { x: 360, y: 1130, hp: 3, golden: true },
+      { x: 360, y: 930, hp: 1 },
+      { x: 170, y: 1060, hp: 1 },
+      { x: 550, y: 1060, hp: 1 },
+      { x: 360, y: 1130, hp: 1, golden: true },
     ],
     clams: [
       { x: 360, y: 560, skin: 'baby' },
       { x: 230, y: 780 },
       { x: 490, y: 780 },
     ],
-    spawnRegion: { x0: 140, y0: 310, x1: 600, y1: 470 },
+    // reaches down past the guard clam into the middle chamber: freeSpot() keeps
+    // every sample a duck-radius clear of the clams, so the extra band is real
+    // water, not a hole the respawn drops ducks into
+    spawnRegion: { x0: 140, y0: 310, x1: 600, y1: 700 },
   },
 ];
