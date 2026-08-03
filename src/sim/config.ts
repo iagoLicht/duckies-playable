@@ -12,7 +12,8 @@ export const SIM = {
   RESTITUTION_BODY: 0.95,
 
   GRAB_R: 80,           // pointer-to-duck pickup radius
-  MIN_PULL: 25,         // below this, release is a whiff (no shot)
+  MIN_PULL: 40,         // below this, release is a whiff (no shot)
+  // official threshold: pulls under this neither aim nor fire
   LAUNCH_SPEED: 1200,   // fixed launch speed — drag sets direction only (official-example mechanic)
 
   POP_SPEED: 120,       // min relative speed for a same-colour pair pop

@@ -18,6 +18,13 @@ import handPageUrl from '../assets/entities/tutorial-hand/tutorial-hand.webp';
 const DUCK_SCALE = 0.9;
 const BARREL_SCALE = 0.85;
 
+// aim visuals (official example): dots crawl forward along the projected path
+const DOT_SPACING = 36;
+const DOT_START = 38;
+const DOT_MAX = 32;
+const DOT_CRAWL = 100; // px/s
+const DEFLECT_LEN = 90;
+
 /** remaining hp -> crate-round set-pose animation (clasps strip as hp falls) */
 function stageFor(b: { maxHp: number; hp: number }): string {
   if (b.maxHp >= 3) return b.hp >= 3 ? 'hp5' : b.hp === 2 ? 'hp3' : 'hp1';
@@ -35,6 +42,8 @@ export class GameScene {
   private duckyData!: SkeletonData;
   private crateData!: SkeletonData;
   private accumulator = 0;
+  /** monotonic clock driving the aim dot crawl */
+  private aimClock = 0;
   /** pointerId that owns the current grab — other pointers are ignored */
   private activePointer: number | null = null;
 
@@ -101,6 +110,7 @@ export class GameScene {
   }
 
   private tick(dt: number): void {
+    this.aimClock += dt;
     // fixed-step the sim regardless of render rate
     this.accumulator += Math.min(dt, 0.1);
     while (this.accumulator >= SIM.DT) {
@@ -230,17 +240,73 @@ export class GameScene {
     if (this.hand?.visible) this.hand.update(dt);
   }
 
+  /**
+   * Official aim visuals: a crawling dotted trajectory (one wall bounce), a red
+   * X where the path dead-ends into nothing, and a white billiards deflection
+   * streak off a struck duck. The X is advisory — release still fires.
+   */
   private drawAim(): void {
     this.aimLine.clear();
-    const p = this.director.slingshot.pull;
-    if (!p || p.len < SIM.MIN_PULL) return;
-    // dotted line opposite the pull (placeholder for Phase C aim vfx).
-    // Fixed length: the launch speed is fixed, so the drag shows direction only.
-    const AIM_LEN = 260;
-    const ux = p.dx / (p.len || 1), uy = p.dy / (p.len || 1);
-    for (let i = 1; i <= 8; i++) {
-      const f = (i / 8) * AIM_LEN;
-      this.aimLine.circle(p.duck.x + ux * f, p.duck.y + uy * f, 7 - i * 0.5).fill({ color: 0xffffff, alpha: 0.85 });
+    const pv = this.director.slingshot.preview();
+    if (!pv) return;
+
+    // --- dots along the polyline ---
+    const segs: Array<{ x0: number; y0: number; ux: number; uy: number; len: number }> = [];
+    let total = 0;
+    for (let i = 0; i + 1 < pv.points.length; i++) {
+      const a = pv.points[i]!, b = pv.points[i + 1]!;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len <= 0) continue;
+      segs.push({ x0: a.x, y0: a.y, ux: (b.x - a.x) / len, uy: (b.y - a.y) / len, len });
+      total += len;
+    }
+    const offset = (this.aimClock * DOT_CRAWL) % DOT_SPACING;
+    for (let n = 0; n < DOT_MAX; n++) {
+      const arc = DOT_START + offset + n * DOT_SPACING;
+      if (arc > total) break;
+      // locate arc along the polyline
+      let rem = arc;
+      let s = 0;
+      while (s < segs.length - 1 && rem > segs[s]!.len) {
+        rem -= segs[s]!.len;
+        s++;
+      }
+      const seg = segs[s]!;
+      const g = total > 0 ? arc / total : 0;
+      this.aimLine
+        .circle(seg.x0 + seg.ux * rem, seg.y0 + seg.uy * rem, (18 - 5.4 * g) / 2)
+        .fill({ color: 0xffffff, alpha: 1 - 0.3 * g });
+    }
+
+    const endPt = pv.points[pv.points.length - 1]!;
+
+    // --- red X where the shot hits nothing ---
+    if (pv.hitId === null) {
+      const a = 20 / Math.SQRT2; // arm extent 20 along each diagonal
+      const stroke = { width: 12, color: 0xE8354A, alpha: 0.95, cap: 'round' as const };
+      this.aimLine
+        .moveTo(endPt.x - a, endPt.y - a).lineTo(endPt.x + a, endPt.y + a).stroke(stroke)
+        .moveTo(endPt.x + a, endPt.y - a).lineTo(endPt.x - a, endPt.y + a).stroke(stroke);
+    }
+
+    // --- white tapered streak off a struck duck (equal-mass billiards) ---
+    if (pv.hitKind === 'duck' && pv.deflect) {
+      const struck = this.director.world.ducks.find((d) => d.id === pv.hitId);
+      if (struck) {
+        const dx = pv.deflect.x, dy = pv.deflect.y;
+        const bx = struck.x + dx * SIM.DUCK_R;
+        const by = struck.y + dy * SIM.DUCK_R;
+        const N = 4;
+        for (let i = 0; i < N; i++) {
+          const t0 = (i / N) * DEFLECT_LEN;
+          const t1 = ((i + 1) / N) * DEFLECT_LEN;
+          const w = 10 - (8 * (i + 0.5)) / N; // 10px at the duck -> 2px at the tip
+          this.aimLine
+            .moveTo(bx + dx * t0, by + dy * t0)
+            .lineTo(bx + dx * t1, by + dy * t1)
+            .stroke({ width: w, color: 0xffffff, alpha: 0.9, cap: 'round' });
+        }
+      }
     }
   }
 }

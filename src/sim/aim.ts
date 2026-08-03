@@ -1,4 +1,5 @@
 import { SIM } from './config';
+import { predictShot, type AimPreview } from './trajectory';
 import type { World } from './world';
 import type { Duck } from './types';
 
@@ -63,17 +64,33 @@ export class Slingshot {
     this.duck = null;
   }
 
+  /**
+   * Post-assist unit launch direction for the current pull, or null when the
+   * pull is too short to aim or fire. One code path for both end() and preview().
+   */
+  private aimDir(): { x: number; y: number } | null {
+    const p = this.pull;
+    if (!p || p.len < SIM.MIN_PULL) return null;
+    const bent = this.applyAssist(p.duck, p.dx / p.len, p.dy / p.len);
+    return { x: bent.dx, y: bent.dy };
+  }
+
+  /** Projected shot for the aim UI. Null when not aiming (or under MIN_PULL). */
+  preview(): AimPreview | null {
+    const duck = this.duck;
+    if (!duck) return null;
+    const dir = this.aimDir();
+    if (!dir) return null;
+    return predictShot(this.world, duck, dir);
+  }
+
   /** Returns true when a real shot was fired (false = whiff, costs nothing). */
   end(): boolean {
-    const p = this.pull;
+    const duck = this.duck;
+    const dir = this.aimDir();
     this.duck = null;
-    if (!p || p.len < SIM.MIN_PULL) return false;
-    let dx = p.dx / p.len;
-    let dy = p.dy / p.len;
-    const bent = this.applyAssist(p.duck, dx, dy);
-    dx = bent.dx;
-    dy = bent.dy;
-    this.world.launch(p.duck.id, dx * SIM.LAUNCH_SPEED, dy * SIM.LAUNCH_SPEED);
+    if (!duck || !dir) return false;
+    this.world.launch(duck.id, dir.x * SIM.LAUNCH_SPEED, dir.y * SIM.LAUNCH_SPEED);
     return true;
   }
 
