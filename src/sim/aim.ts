@@ -38,7 +38,8 @@ export class Slingshot {
     let best: Duck | null = null;
     let bestD: number = SIM.GRAB_R;
     for (const d of this.world.ducks) {
-      if (d.live || d.popping) continue;
+      // a matched duck is on its fuse: still a solid, still a target, not a shot
+      if (d.live || d.popping || d.matched) continue;
       const dist = Math.hypot(d.x - x, d.y - y);
       if (dist < bestD) {
         bestD = dist;

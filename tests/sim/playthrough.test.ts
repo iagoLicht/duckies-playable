@@ -34,7 +34,8 @@ function playOnce(seed: number): RunStats {
     if (dir.world.time < nextShotAt) continue;
     nextShotAt = dir.world.time + 1.6 + rng() * 0.9;
 
-    const resting = dir.world.ducks.filter((d) => !d.live && !d.popping);
+    // matched ducks wear no ring and refuse a grab — a player wouldn't tap one
+    const resting = dir.world.ducks.filter((d) => !d.live && !d.popping && !d.matched);
     if (resting.length === 0) continue;
     const duck = resting[Math.floor(rng() * resting.length)]!;
 

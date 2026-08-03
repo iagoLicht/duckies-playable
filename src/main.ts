@@ -224,6 +224,12 @@ async function boot(): Promise<void> {
 
   // deterministic readiness signal for the screenshot harness
   (window as unknown as { __sceneReady?: boolean }).__sceneReady = true;
+  // dev-only handle so capture harnesses can read exact sim state (fuses, match
+  // flags) instead of guessing from pixels. `import.meta.env.DEV` is statically
+  // false in the build, so this whole block is dropped from the shipped file.
+  if (import.meta.env.DEV) {
+    (window as unknown as { __scene?: GameScene }).__scene = scene;
+  }
 }
 
 boot().catch((e: unknown) => {

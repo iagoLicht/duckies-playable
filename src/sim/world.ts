@@ -15,8 +15,6 @@ export class World {
   readonly events: SimEvent[] = [];
   time = 0;
   private nextId = 1;
-  /** scheduled chain pops: duck id -> sim time to pop */
-  private popQueue: Array<{ id: number; at: number }> = [];
 
   constructor(seed: number) {
     this.rng = mulberry32(seed);
@@ -25,7 +23,7 @@ export class World {
   spawnDuck(colour: Colour, x: number, y: number): Duck {
     const d: Duck = {
       id: this.nextId++, kind: 'duck', colour, x, y, vx: 0, vy: 0,
-      live: false, popping: false,
+      live: false, popping: false, matched: false, matchFuse: 0,
     };
     this.ducks.push(d);
     this.events.push({ type: 'duckSpawned', duck: d });
@@ -50,7 +48,6 @@ export class World {
 
   step(dt: number): void {
     this.time += dt;
-    this.processPopQueue();
 
     const damp = Math.exp(-SIM.FRICTION * dt);
     for (const d of this.ducks) {
@@ -74,6 +71,43 @@ export class World {
       this.collideDuckPairs();
       this.collideDuckBarrels();
     }
+
+    this.tickFuses();
+  }
+
+  /**
+   * One fixed step == one fuse tick. Runs after the substeps, mirroring the
+   * official's tick order: a duck flagged by a contact this tick is already
+   * down to MATCH_FUSE_TICKS - 1 by the time the view first sees it.
+   */
+  private tickFuses(): void {
+    // popDuck splices, and its blast can flag ducks further along — snapshot
+    for (const d of [...this.ducks]) {
+      if (!d.matched || d.popping) continue;
+      d.matchFuse--;
+      if (d.matchFuse <= 0) this.popDuck(d);
+    }
+  }
+
+  /**
+   * Light the fuse. Guarded per duck, so a blinking duck that ploughs into a
+   * fresh same-colour one flags its victim without resetting its own fuse.
+   */
+  private flagMatched(d: Duck): void {
+    if (d.matched || d.popping) return;
+    d.matched = true;
+    d.matchFuse = SIM.MATCH_FUSE_TICKS;
+    this.events.push({ type: 'duckMatched', id: d.id });
+  }
+
+  /** Remove the duck now and detonate where it stood. */
+  popDuck(d: Duck): void {
+    if (d.popping) return;
+    d.popping = true;
+    const idx = this.ducks.indexOf(d);
+    if (idx >= 0) this.ducks.splice(idx, 1);
+    this.events.push({ type: 'duckPopped', id: d.id, colour: d.colour, x: d.x, y: d.y });
+    this.blast(d.colour, d.x, d.y);
   }
 
   private collideWalls(): void {
@@ -116,19 +150,17 @@ export class World {
     }
   }
 
+  /**
+   * Same-colour contact above POP_SPEED lights both fuses (official: the pair's
+   * PRE-bounce relative speed decides, and both ducks are flagged even when only
+   * one was the shot). Nothing pops here — flagMatched does the guarding.
+   */
   protected onDuckContact(a: Duck, b: Duck, relSpeed: number): void {
     if (a.colour !== b.colour) return;
-    if (a.popping || b.popping) return;
     if (!a.live && !b.live) return;
     if (relSpeed < SIM.POP_SPEED) return;
-    this.schedulePop(a, 0);
-    this.schedulePop(b, 0);
-  }
-
-  private schedulePop(d: Duck, delay: number): void {
-    if (d.popping) return;
-    d.popping = true;
-    this.popQueue.push({ id: d.id, at: this.time + delay });
+    this.flagMatched(a);
+    this.flagMatched(b);
   }
 
   private collideDuckBarrels(): void {
@@ -168,26 +200,17 @@ export class World {
     }
   }
 
-  protected processPopQueue(): void {
-    if (this.popQueue.length === 0) return;
-    const due = this.popQueue.filter((p) => p.at <= this.time);
-    this.popQueue = this.popQueue.filter((p) => p.at > this.time);
-    for (const p of due) {
-      const idx = this.ducks.findIndex((d) => d.id === p.id);
-      if (idx < 0) continue;
-      const d = this.ducks[idx]!;
-      this.ducks.splice(idx, 1);
-      this.events.push({ type: 'duckPopped', id: d.id, colour: d.colour, x: d.x, y: d.y });
-      this.blast(d.colour, d.x, d.y);
-    }
-  }
-
+  /**
+   * Detonation: same-colour ducks in radius get a FRESH fuse rather than an
+   * instant pop, so each chain generation costs one full fuse. Barrels take a
+   * hit regardless of colour.
+   */
   blast(colour: Colour, x: number, y: number): void {
     this.events.push({ type: 'blast', colour, x, y, r: SIM.BLAST_R });
     for (const d of this.ducks) {
-      if (d.colour !== colour || d.popping) continue;
+      if (d.colour !== colour || d.popping || d.matched) continue;
       if (Math.hypot(d.x - x, d.y - y) <= SIM.BLAST_R + SIM.DUCK_R) {
-        this.schedulePop(d, SIM.CHAIN_DELAY);
+        this.flagMatched(d);
       }
     }
     for (const b of [...this.barrels]) {

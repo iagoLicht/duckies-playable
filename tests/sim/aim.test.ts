@@ -13,6 +13,19 @@ describe('Slingshot', () => {
     expect(s.begin(600, 300)).toBe(false);
   });
 
+  it('ignores a duck that is already on its match fuse', () => {
+    const w = new World(1);
+    const a = w.spawnDuck('red', 300, 700);
+    w.spawnDuck('red', 393, 700);
+    const s = new Slingshot(w);
+    expect(s.begin(300, 700)).toBe(true); // grabbable before the match
+    s.cancel();
+    w.launch(a.id, 900, 0);
+    for (let i = 0; i < 20; i++) w.step(SIM.DT); // collide -> both fuses lit
+    expect(a.matched).toBe(true);
+    expect(s.begin(a.x, a.y)).toBe(false);
+  });
+
   it('tiny pull is a whiff: no launch, duck stays put', () => {
     const w = new World(1);
     const d = w.spawnDuck('red', 300, 700);

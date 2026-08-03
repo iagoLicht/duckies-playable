@@ -31,7 +31,7 @@ describe('Director', () => {
     const d = new Director(7);
     d.start();
     const duck = d.world.ducks[0]!;
-    d.world.blast(duck.colour, duck.x, duck.y); // pops at least that duck
+    d.world.popDuck(duck); // pop it outright — blast() only lights fuses now
     run(d, 2);
     expect(d.world.ducks.length).toBe(4);
   });
@@ -53,7 +53,7 @@ describe('Director', () => {
     // pop ducks down to one
     while (d.world.ducks.length > 1) {
       const duck = d.world.ducks[0]!;
-      d.world.blast(duck.colour, duck.x, duck.y);
+      d.world.popDuck(duck);
       run(d, 0.5);
     }
     run(d, 3);
@@ -80,7 +80,7 @@ describe('Director', () => {
     d.start();
     while (d.world.ducks.length > 0) {
       const duck = d.world.ducks[0]!;
-      d.world.blast(duck.colour, duck.x, duck.y);
+      d.world.popDuck(duck);
       run(d, 0.2);
     }
     run(d, 2);

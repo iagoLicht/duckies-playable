@@ -10,8 +10,12 @@ export interface Duck {
   vy: number;
   /** true from launch until it comes to rest — pops/damage need a live duck */
   live: boolean;
-  /** set while a chain pop is scheduled so it can't be double-queued */
+  /** set the instant the duck leaves the world, so it can't be popped twice */
   popping: boolean;
+  /** fuse lit: same-colour contact or a blast caught it. Keeps full physics. */
+  matched: boolean;
+  /** fixed-step ticks left on the fuse; at 0 the duck pops (see SIM.MATCH_FUSE_TICKS) */
+  matchFuse: number;
 }
 
 export interface Barrel {
@@ -28,6 +32,7 @@ export interface Barrel {
 export type SimEvent =
   | { type: 'duckLaunched'; id: number }
   | { type: 'duckStopped'; id: number }
+  | { type: 'duckMatched'; id: number }
   | { type: 'duckPopped'; id: number; colour: Colour; x: number; y: number }
   | { type: 'blast'; colour: Colour; x: number; y: number; r: number }
   | { type: 'duckSpawned'; duck: Duck }

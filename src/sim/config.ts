@@ -16,10 +16,17 @@ export const SIM = {
   // official threshold: pulls under this neither aim nor fire
   LAUNCH_SPEED: 1200,   // fixed launch speed — drag sets direction only (official-example mechanic)
 
-  POP_SPEED: 120,       // min relative speed for a same-colour pair pop
+  // Match constants below are the official example's, converted at our 90 px/unit.
+  // (decomp `or`: POP_SPEED 1.4 u/s, BLAST_RADIUS 1.5 u, MATCH_FUSE_TICKS 90,
+  // MATCH_BLINK_TICKS 9.) Same-colour contact at speed does NOT pop on impact —
+  // it lights a fuse: the duck keeps full physics, blinks white, and pops when
+  // the fuse runs out. Each blast relights a fresh fuse on the ducks it catches,
+  // so a chain costs one full fuse per generation.
+  POP_SPEED: 126,       // min relative speed for a same-colour pair to match
   BARREL_HIT_SPEED: 90, // min impact speed for a direct hit to damage a barrel
-  BLAST_R: 140,
-  CHAIN_DELAY: 0.08,    // seconds between chain hops (readability)
+  BLAST_R: 135,
+  MATCH_FUSE_TICKS: 90, // fixed steps from match to pop (60 ticks = 1 s)
+  MATCH_BLINK_TICKS: 9, // fixed steps per white/normal blink band
 
   RESPAWN_DELAY: 0.6,
   ASSIST_CONE_DEG: 28,

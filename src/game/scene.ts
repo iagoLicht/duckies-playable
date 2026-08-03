@@ -1,5 +1,7 @@
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
-import { Skin, type SkeletonData, type Spine } from '@esotericsoftware/spine-pixi-v8';
+import {
+  Skin, type Attachment, type Color, type SkeletonData, type Spine,
+} from '@esotericsoftware/spine-pixi-v8';
 import { Director } from '../sim/director';
 import { SIM } from '../sim/config';
 import type { AimPreview } from '../sim/trajectory';
@@ -16,6 +18,7 @@ import handJsonUrl from '../assets/entities/tutorial-hand/tutorial-hand.json?url
 import handAtlasText from '../assets/entities/tutorial-hand/tutorial-hand.atlas?raw';
 import handPageUrl from '../assets/entities/tutorial-hand/tutorial-hand.webp';
 import starUrl from '../assets/vfx/impact-star.webp';
+import blobUrl from '../assets/vfx/explode-particle.webp';
 
 const DUCK_SCALE = 0.9;
 const BARREL_SCALE = 0.85;
@@ -45,6 +48,23 @@ const T_RING = 1;
 const T_SPIN = 2;
 /** explode_vfx runs 0.17s — a hair more so its last frame lands before destroy */
 const POP_TIME = 0.2;
+
+// ── pop feel, lifted from the official example (decomp GameScene.onPop) ──────
+/** star tint on a pop: their warm-white `Yn(..., 16773304)` burst */
+const POP_STAR_TINT = 0xffe9b8;
+/** additive flash: their duck-tinted `foam` image, 30 -> 70 px over 220ms QuadOut */
+const FLASH_R0 = 15, FLASH_R1 = 35, FLASH_TIME = 0.22, FLASH_ALPHA = 0.75;
+/** their `time2.freeze(scene, 40)` — 40ms of dead sim while the vfx play on */
+const HITSTOP = 0.04;
+/** their `cameras.main.shake(70, 0.003)`; Phaser scales intensity by camera size */
+const SHAKE_TIME = 0.07, SHAKE_INTENSITY = 0.003;
+const DESIGN_W = 720, DESIGN_H = 1280;
+/** their `hit()`: 1.22x scale punch over 100ms, yoyo, Quad.easeOut */
+const PUNCH_SCALE = 1.22, PUNCH_TIME = 0.1;
+/** their match burst is the pop burst at 0.7 */
+const MATCH_BURST = 0.7;
+
+const quadOut = (t: number): number => 1 - (1 - t) * (1 - t);
 
 // aim visuals (official example): dots crawl forward along the projected path
 const DOT_SPACING = 36;
@@ -83,6 +103,16 @@ export class GameScene {
   /** duck ids currently wearing the green selection ring */
   private ringed = new Set<number>();
   private starTex!: Texture;
+  /** soft white disc standing in for the official's blurred `foam` sprite */
+  private blobTex!: Texture;
+  /** duck ids currently whited-out by the match blink */
+  private flashOn = new Set<number>();
+  /** per-duck isolated attachment colours backing the current white band */
+  private flashSlots = new Map<number, Array<{ color: Color; orig: [number, number, number, number] }>>();
+  /** seconds of hitstop left — the sim is dead while this is positive */
+  private hitstop = 0;
+  /** seconds of camera shake left */
+  private shake = 0;
   private accumulator = 0;
   /** monotonic clock driving the aim dot crawl */
   private aimClock = 0;
@@ -101,6 +131,7 @@ export class GameScene {
       skelUrl: crateSkelUrl, atlasText: crateAtlasText, pageUrl: cratePageUrl,
     });
     this.starTex = await loadTexture(starUrl);
+    this.blobTex = await loadTexture(blobUrl);
     this.app.stage.addChild(this.layer, this.fx, this.aimLine);
 
     // The rig's `active-ring` skin ships ZERO attachments — it exists to carry the
@@ -169,11 +200,18 @@ export class GameScene {
 
   private tick(dt: number): void {
     this.aimClock += dt;
-    // fixed-step the sim regardless of render rate
-    this.accumulator += Math.min(dt, 0.1);
-    while (this.accumulator >= SIM.DT) {
-      this.director.step(SIM.DT);
-      this.accumulator -= SIM.DT;
+    if (this.hitstop > 0) {
+      // Official hitstop: `time2.freeze` zeroes the SIM's timescale only — the
+      // decomp's GameScene.update gates `sim.update` and nothing else, so the
+      // pop's own vfx and the spine rigs keep playing through the 40ms.
+      this.hitstop = Math.max(0, this.hitstop - dt);
+    } else {
+      // fixed-step the sim regardless of render rate
+      this.accumulator += Math.min(dt, 0.1);
+      while (this.accumulator >= SIM.DT) {
+        this.director.step(SIM.DT);
+        this.accumulator -= SIM.DT;
+      }
     }
     this.drainEvents();
     // one trajectory probe per frame — the rings and the aim UI both read it
@@ -181,6 +219,26 @@ export class GameScene {
     this.syncViews(dt);
     this.syncRings(pv);
     this.drawAim(pv);
+    this.syncShake(dt);
+  }
+
+  /**
+   * Phaser's camera shake, ported: a fresh uniform offset every frame for the
+   * duration (no falloff), scaled by the viewport, snapping back to zero at the
+   * end. The stage is otherwise always at the origin.
+   */
+  private syncShake(dt: number): void {
+    if (this.shake <= 0) return;
+    this.shake -= dt;
+    if (this.shake <= 0) {
+      this.shake = 0;
+      this.app.stage.position.set(0, 0);
+      return;
+    }
+    this.app.stage.position.set(
+      (Math.random() * 2 - 1) * SHAKE_INTENSITY * DESIGN_W,
+      (Math.random() * 2 - 1) * SHAKE_INTENSITY * DESIGN_H,
+    );
   }
 
   /**
@@ -194,7 +252,8 @@ export class GameScene {
     for (const d of this.director.world.ducks) {
       const v = this.duckViews.get(d.id);
       if (!v) continue;
-      this.setRing(d.id, v, aiming ? d.id === target : !d.live && !d.popping);
+      // a matched duck is spoken for: no ring, it can't be grabbed any more
+      this.setRing(d.id, v, aiming ? d.id === target : !d.live && !d.popping && !d.matched);
     }
   }
 
@@ -223,6 +282,18 @@ export class GameScene {
       case 'duckSpawned':
         this.addDuck(e.duck);
         break;
+      case 'duckMatched': {
+        const v = this.duckViews.get(e.id);
+        const d = this.director.world.ducks.find((k) => k.id === e.id);
+        if (v && d) {
+          // official hit(): the rig's own `jump`, then back to idle
+          v.state.setAnimation(T_BODY, 'jump', false);
+          v.state.addAnimation(T_BODY, 'idle', true, 0);
+          this.punch(v);
+          this.burst(d.x, d.y, BURST_TINTS[d.colour], MATCH_BURST);
+        }
+        break;
+      }
       case 'duckPopped': {
         const v = this.duckViews.get(e.id);
         if (v) {
@@ -230,7 +301,12 @@ export class GameScene {
           this.ringed.delete(e.id);
           this.popDuck(v);
         }
-        this.burst(e.x, e.y, e.colour);
+        this.flashOn.delete(e.id);
+        this.flashSlots.delete(e.id);
+        this.burst(e.x, e.y, POP_STAR_TINT, 1);
+        this.popFlash(e.x, e.y, e.colour);
+        this.hitstop = HITSTOP;
+        this.shake = SHAKE_TIME;
         break;
       }
       case 'blast':
@@ -328,30 +404,106 @@ export class GameScene {
     this.app.ticker.add(run);
   }
 
-  /** Star splash at the popping duck — the shipped impact-star, duck-tinted. */
-  private burst(x: number, y: number, colour: Colour): void {
+  /** Star splash — the shipped impact-star. `k` scales it (matches use 0.7). */
+  private burst(x: number, y: number, tint: number, k = 1): void {
     const s = new Sprite(this.starTex);
     s.anchor.set(0.5);
     s.position.set(x, y);
-    s.tint = BURST_TINTS[colour];
+    s.tint = tint;
     s.rotation = (x + y) % Math.PI; // vary the spike angles pop to pop
     this.fx.addChild(s);
     let t = 0;
     const anim = (tk: { deltaMS: number }): void => {
       t += tk.deltaMS / 1000;
-      const k = Math.min(1, t / 0.26);
+      const p = Math.min(1, t / 0.26);
       // fast out, slow settle. The 289px star ends ~115px across — a shade wider
       // than the 92px duck, like the reference splash; bigger just smears.
-      const e = 1 - (1 - k) * (1 - k);
-      s.scale.set(0.16 + 0.24 * e);
+      s.scale.set((0.16 + 0.24 * quadOut(p)) * k);
       // hold full while the duck is still blowing up, then fade
-      s.alpha = k < 0.35 ? 1 : 1 - (k - 0.35) / 0.65;
-      if (k >= 1) {
+      s.alpha = p < 0.35 ? 1 : 1 - (p - 0.35) / 0.65;
+      if (p >= 1) {
         this.app.ticker.remove(anim);
         s.destroy();
       }
     };
     this.app.ticker.add(anim);
+  }
+
+  /** Additive duck-tinted bloom at the pop — the official's `foam` flash. */
+  private popFlash(x: number, y: number, colour: Colour): void {
+    const s = new Sprite(this.blobTex);
+    s.anchor.set(0.5);
+    s.blendMode = 'add';
+    s.tint = TINTS[colour];
+    s.position.set(x, y);
+    this.fx.addChild(s);
+    let t = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      const p = Math.min(1, t / FLASH_TIME);
+      const e = quadOut(p);
+      s.width = s.height = (FLASH_R0 + (FLASH_R1 - FLASH_R0) * e) * 2;
+      s.alpha = FLASH_ALPHA * (1 - e);
+      if (p >= 1) {
+        this.app.ticker.remove(anim);
+        s.destroy();
+      }
+    };
+    this.app.ticker.add(anim);
+  }
+
+  /** Squash-free scale punch on a matched duck — the official's `hit()` tween. */
+  private punch(v: Spine): void {
+    let t = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      t += tk.deltaMS / 1000;
+      if (v.destroyed) {
+        this.app.ticker.remove(anim);
+        return;
+      }
+      // out then back, Quad.easeOut each leg (Phaser yoyo re-runs the ease)
+      const leg = t < PUNCH_TIME ? t / PUNCH_TIME : 1 - (t - PUNCH_TIME) / PUNCH_TIME;
+      const k = 1 + (PUNCH_SCALE - 1) * quadOut(Math.max(0, leg));
+      v.scale.set(DUCK_SCALE * k);
+      if (t >= PUNCH_TIME * 2) {
+        this.app.ticker.remove(anim);
+        v.scale.set(DUCK_SCALE);
+      }
+    };
+    this.app.ticker.add(anim);
+  }
+
+  /**
+   * Match blink. The official whites the duck out by copying every attachment
+   * and forcing its colour to opaque white (decomp isolateAttachmentsForFlash +
+   * syncMatchFlash) — this rig is built the same way, with the duck's hue living
+   * in the attachment colours over neutral art, so the same trick lands the same
+   * flat-white silhouette. Attachments are shared across every duck of a colour,
+   * hence the per-instance copy. Re-isolated at each white band so an animation
+   * that swapped an attachment mid-fuse can't strand a slot.
+   */
+  private syncMatchFlash(d: Duck, v: Spine): void {
+    const on = d.matched && Math.floor(d.matchFuse / SIM.MATCH_BLINK_TICKS) % 2 === 0;
+    if (on === this.flashOn.has(d.id)) return;
+    if (on) {
+      const slots: Array<{ color: Color; orig: [number, number, number, number] }> = [];
+      for (const slot of v.skeleton.slots) {
+        const att = slot.getAttachment() as (Attachment & { color?: Color; copy?: () => Attachment }) | null;
+        if (!att?.color || typeof att.copy !== 'function') continue;
+        const copy = att.copy() as Attachment & { color: Color };
+        slot.setAttachment(copy);
+        slots.push({ color: copy.color, orig: [copy.color.r, copy.color.g, copy.color.b, copy.color.a] });
+      }
+      for (const s of slots) s.color.set(1, 1, 1, 1);
+      this.flashSlots.set(d.id, slots);
+      this.flashOn.add(d.id);
+    } else {
+      for (const s of this.flashSlots.get(d.id) ?? []) {
+        s.color.set(s.orig[0], s.orig[1], s.orig[2], s.orig[3]);
+      }
+      this.flashSlots.delete(d.id);
+      this.flashOn.delete(d.id);
+    }
   }
 
   private flashBlast(x: number, y: number, r: number, colour: Colour): void {
@@ -377,6 +529,7 @@ export class GameScene {
       const v = this.duckViews.get(d.id);
       if (v) {
         v.position.set(d.x, d.y);
+        if (d.matched) this.syncMatchFlash(d, v);
         v.update(dt);
       }
     }
