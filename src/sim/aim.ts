@@ -18,6 +18,13 @@ import type { Duck } from './types';
 export class Slingshot {
   /** 0..1 — director raises this over the level */
   assist = 0.35;
+  /**
+   * Set by the Director: the budget is spent, or the level is already decided.
+   * The view refuses grabs too, but the bar belongs here — otherwise a caller
+   * that drives the sim directly (a bot, a test) can fire with no moves left,
+   * and because a fresh shot un-settles the board the failure check never runs.
+   */
+  blocked = false;
   private duck: Duck | null = null;
   /** pointer-down position — the pull is anchored here, not at the duck centre,
    *  so an off-centre grab followed by an immediate release is a whiff */
@@ -41,6 +48,7 @@ export class Slingshot {
   }
 
   begin(x: number, y: number): boolean {
+    if (this.blocked) return false;
     let best: Duck | null = null;
     let bestD: number = SIM.GRAB_R;
     for (const d of this.world.ducks) {
@@ -96,7 +104,7 @@ export class Slingshot {
     const duck = this.duck;
     const dir = this.aimDir();
     this.duck = null;
-    if (!duck || !dir) return false;
+    if (this.blocked || !duck || !dir) return false;
     // the release is refused unless the trajectory reaches another duck — the
     // player must adjust until the guide locks a target (the aim UI shows the
     // red X for exactly the aims this rejects)

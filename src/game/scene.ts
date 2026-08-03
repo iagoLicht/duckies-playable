@@ -3,6 +3,7 @@ import {
   Skin, type Attachment, type Color, type SkeletonData, type Spine,
 } from '@esotericsoftware/spine-pixi-v8';
 import { Director } from '../sim/director';
+import { LEVELS } from '../sim/levels';
 import { SIM } from '../sim/config';
 import type { AimPreview } from '../sim/trajectory';
 import type { Barrel, Clam, Colour, Duck, SimEvent } from '../sim/types';
@@ -86,6 +87,9 @@ const SPAWN_STAGGER = 0.055;
 const SPAWN_SCALE_TIME = 0.3;
 /** a random settled duck dances every 2.8s (official idle-flavor timer) */
 const DANCE_PERIOD = 2.8;
+// how long the cleared/failed beat is allowed to play before the board swaps
+const LEVEL_ADVANCE_DELAY = 1.8;
+const LEVEL_RETRY_DELAY = 1.4;
 
 // Clam spine tracks. The shell's state machine owns track 0 (inactive ->
 // bump-inactive -> bump -> idle); the water ring loops forever beside it, the
@@ -204,7 +208,8 @@ function stageFor(b: { hp: number }): string {
 }
 
 export class GameScene {
-  readonly director: Director;
+  /** rebuilt by loadLevel() as the campaign advances */
+  director: Director;
   private duckViews = new Map<number, Spine>();
   private barrelViews = new Map<number, Spine>();
   private clamViews = new Map<number, Spine>();
@@ -257,8 +262,11 @@ export class GameScene {
   private movesText!: Text;
   private goalText!: Text;
 
-  constructor(private app: Application, seed: number) {
-    this.director = new Director(seed);
+  constructor(private app: Application, private seed: number, startLevel = 0) {
+    // clamped so a stray ?level= can never ask the Director for a level that
+    // does not exist (it throws) — the campaign just starts at the last one
+    const i = Math.min(Math.max(0, startLevel), LEVELS.length - 1);
+    this.director = new Director(seed + i, i);
   }
 
   async init(): Promise<void> {
@@ -646,17 +654,67 @@ export class GameScene {
       case 'counter':
         this.setCounter(this.goalText, `${e.done}/${e.total}`);
         break;
-      case 'levelCleared':
+      case 'levelCleared': {
         console.log(`level ${e.index + 1} CLEARED with ${e.movesLeft} moves to spare`);
         this.celebrate();
+        const next = e.index + 1;
+        // the campaign rolls straight on; the last level just stays cleared,
+        // holding the celebration until an end card exists to take over
+        if (next < LEVELS.length) this.after(LEVEL_ADVANCE_DELAY, () => this.loadLevel(next));
         break;
+      }
       case 'levelFailed':
         console.log(`level ${e.index + 1} FAILED — out of moves`);
         this.lament();
+        // a miss costs nothing but the retry — same board, fresh budget
+        this.after(LEVEL_RETRY_DELAY, () => this.loadLevel(e.index));
         break;
       default:
         break; // finaleArmed/won ride on levelCleared; end-card UI is a later change
     }
+  }
+
+  /**
+   * Swap the board for another level, keeping every loaded rig and texture.
+   * Everything that keys off a duck/barrel/clam id has to go, because the next
+   * Director starts its ids from 1 again — a surviving entry would be claimed by
+   * an unrelated entity. In-flight fx are only unparented, not destroyed: they
+   * are sub-second and their own ticker callbacks dispose of them, whereas
+   * destroying them here would pull the rug out mid-tween.
+   */
+  loadLevel(index: number): void {
+    for (const v of this.duckViews.values()) v.destroy();
+    for (const v of this.barrelViews.values()) v.destroy();
+    for (const v of this.clamViews.values()) v.destroy();
+    this.duckViews.clear();
+    this.barrelViews.clear();
+    this.clamViews.clear();
+    this.fx.removeChildren();
+    if (this.hand) {
+      this.fx.addChild(this.hand);
+      this.hand.visible = index === 0; // the tutorial only greets level 1
+    }
+    this.spawnQueue.length = 0;
+    this.spawnTimer = 0;
+    this.spawning.clear();
+    this.ringMode.clear();
+    this.aimBoneRot.clear();
+    this.flashOn.clear();
+    this.flashSlots.clear();
+    this.hitstop = 0;
+    this.shake = 0;
+    this.accumulator = 0;
+    this.danceTimer = 0;
+    this.activePointer = null;
+    this.aimLine.clear();
+    this.crescent.visible = false;
+    for (const d of this.dotPool) d.visible = false;
+    this.app.stage.position.set(0, 0); // drop any shake offset mid-flight
+
+    // a per-level seed keeps every level's respawns deterministic on their own
+    this.director = new Director(this.seed + index, index);
+    this.director.start();
+    this.drainEvents();
   }
 
   /** Take one duck off the spawn queue per stagger period and build its view. */

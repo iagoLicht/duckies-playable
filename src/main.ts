@@ -219,7 +219,11 @@ async function boot(): Promise<void> {
   app.stage.addChild(tubFrame);
 
   // ── the live game: sim-driven entities, input, fx ────────────────────────
-  const scene = new GameScene(app, 20260802);
+  // ?level=N (1-based) jumps straight to a level — for playtesting and for the
+  // screenshot harness, which needs to reach level 7 without playing six levels
+  const wanted = Number(new URLSearchParams(location.search).get('level'));
+  const startLevel = Number.isFinite(wanted) && wanted >= 1 ? Math.floor(wanted) - 1 : 0;
+  const scene = new GameScene(app, 20260802, startLevel);
   await scene.init();
 
   // deterministic readiness signal for the screenshot harness

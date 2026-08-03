@@ -112,12 +112,15 @@ export const LEVELS: LevelDef[] = [
   // diamond chips all four crates at once, and a second-generation victim that
   // settles anywhere in there does it again. Two same-colour pairs on the board
   // so the player can find that centre twice.
-  // Budget intent: 5 hits in 7 shots, but only if the pops land in the pocket;
+  // Budget intent: 5 hits in 5 shots, but only if the pops land in the pocket;
   // pops that go off outside the diamond waste a shot entirely, which is exactly
-  // the near-miss this level sells.
+  // the near-miss this level sells. (Measured: a zero-skill bot firing random
+  // legal aims cleared this 98% of the time at 7 moves — barrels are far softer
+  // than their hp suggests, because a launched duck ricochets and re-hits. 5 is
+  // the number that makes the pocket matter.)
   {
     name: 'Chain Gang',
-    moves: 7,
+    moves: 5,
     assist: 0.5,
     targetDucks: 5,
     ducks: [
@@ -179,11 +182,13 @@ export const LEVELS: LevelDef[] = [
   // shot pops them up at y≈500, well short of the lens; you have to nudge one
   // green down into the throat first and match it on the next shot. Three
   // barrels wait underneath as the reward for punching through.
-  // Budget intent: 5 goals / 6 hits in 7 shots. Doing the clams one at a time
-  // is survivable but leaves nothing for the barrels — that is the near-miss.
+  // Budget intent: 5 goals / 6 hits in 8 shots. Doing the clams one at a time
+  // is survivable but leaves almost nothing for the barrels — that is the
+  // near-miss. (Clams are the real difficulty currency: they need a direct fast
+  // hit or a blast centred within 135, where a barrel just needs to be bumped.)
   {
     name: 'Twin Pearls',
-    moves: 7,
+    moves: 8,
     assist: 0.45,
     targetDucks: 3,
     ducks: [
@@ -209,11 +214,11 @@ export const LEVELS: LevelDef[] = [
   // range from either — but a duck that settles at roughly (330,790) is inside
   // BLAST_R of the keystone *and* of the left hp3. Finding those double-dip
   // positions three or four times over is the solve.
-  // Budget intent: 5 goals / 10 hits in 9 shots. Assist drops to 0.4 because
+  // Budget intent: 5 goals / 10 hits in 7 shots. Assist drops to 0.4 because
   // this is the first level that punishes a shot landing 40px off.
   {
     name: 'Ironclad',
-    moves: 9,
+    moves: 7,
     assist: 0.4,
     targetDucks: 5,
     ducks: [
@@ -241,11 +246,11 @@ export const LEVELS: LevelDef[] = [
   // low (0.4) precisely so a bank shot survives the aim bend instead of being
   // snapped back onto the nearest duck. The left clam doubles as the rail that
   // sends a duck into the left bumper.
-  // Budget intent: 6 goals / 8 hits in 8 shots, and at least two of those hits
+  // Budget intent: 6 goals / 8 hits in 9 shots, and at least two of those hits
   // really do want to arrive sideways.
   {
     name: 'Pinball',
-    moves: 8,
+    moves: 9,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -285,10 +290,10 @@ export const LEVELS: LevelDef[] = [
   // the far side with no duck-to-duck line, and since respawns only fire below
   // targetDucks the board can reach a state where no shot is legal at all. Keep
   // a lane open in any level that walls the board across.
-  // Budget intent: 6 goals / 10 hits in 10 shots, with the ordering forced.
+  // Budget intent: 6 goals / 10 hits in 9 shots, with the ordering forced.
   {
     name: 'The Vault',
-    moves: 10,
+    moves: 9,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -318,12 +323,12 @@ export const LEVELS: LevelDef[] = [
   // clearing this board is about aiming the *knock*, one generation at a time,
   // down the staircase to the hp3 keystone and the two low crates. Lowest assist
   // in the campaign (0.35) — the drift you want is measured in tens of pixels.
-  // Budget intent: 6 goals / 11 hits in 10 shots. Only multi-generation chains
+  // Budget intent: 6 goals / 11 hits in 7 shots. Only multi-generation chains
   // pay for that; a player trading one shot per hit runs out around the third
   // step, with the bottom row untouched and visible. Cruellest near-miss here.
   {
     name: 'The Gauntlet',
-    moves: 10,
+    moves: 7,
     assist: 0.35,
     targetDucks: 5,
     ducks: [

@@ -45,6 +45,7 @@ export class Director {
   }
 
   start(): void {
+    this.slingshot.blocked = this.movesLeft === 0;
     for (const d of this.level.ducks) this.world.spawnDuck(d.colour, d.x, d.y);
     for (const b of this.level.barrels) {
       this.world.spawnBarrel('wood', b.x, b.y, b.hp, b.golden ?? false);
@@ -98,6 +99,9 @@ export class Director {
       this.slingshot.assist = Math.max(this.level.assist, 0.9);
       this.pushLocal({ type: 'finaleArmed' });
     }
+
+    // the budget bars the slingshot itself, not just the view
+    this.slingshot.blocked = this.movesLeft === 0 || this.won || this.failed;
 
     this.handleRespawns();
   }
