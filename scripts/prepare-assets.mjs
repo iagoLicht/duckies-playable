@@ -40,6 +40,9 @@ const WEBP = [
   { src: 'entities/oyster/pearl.png', q: 88 },                      // manifest: "52x52 glossy pearl … the droppable pearl it spills"
   { src: 'theme/in-game-bg.png', q: 60 },                           // full-screen bg, flat art survives low q
   { src: 'icons/goal-Barrel.png', q: 75 },
+  // the pink shell with a pearl in it — the HUD's clam-goal icon. The board
+  // reassembly assigns it exactly that role, alongside goal-Barrel.
+  { src: 'icons/goal-Bumper.png', q: 75 },
   { src: 'icons/goal-DuckAll.png', q: 75 },
   { src: 'ui/btn-play-hero.png', q: 75 },
   { src: 'ui/hud-currency-plate.png', q: 75 },

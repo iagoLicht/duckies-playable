@@ -27,8 +27,8 @@ import blobUrl from '../assets/vfx/explode-particle.webp';
 import aimDotUrl from '../assets/vfx/aim/aim-dot.webp';
 import touchBgUrl from '../assets/vfx/aim/aim-touch-bg.webp';
 import touchFrontUrl from '../assets/vfx/aim/aim-touch-front.webp';
-import platePageUrl from '../assets/ui/hud-currency-plate.webp';
 import goalIconUrl from '../assets/icons/goal-Barrel.webp';
+import clamIconUrl from '../assets/icons/goal-Bumper.webp';
 import cherryBombUrl from '../assets/fonts/cherry-bomb.woff2';
 
 const DUCK_SCALE = 0.9;
@@ -168,6 +168,23 @@ const PUNCH_SCALE = 1.22, PUNCH_TIME = 0.1;
 /** their match burst is the pop burst at 0.7 */
 const MATCH_BURST = 0.7;
 
+// ── motion trail ─────────────────────────────────────────────────────────────
+// The official trails foam behind anything moving (decomp: a `foam` particle
+// every 0.18u of travel, 320ms life, alpha 0.9 -> 0, additive). Deliberately
+// softer here: a third of the opacity, a shorter life so the wake hugs the
+// duck, and speed-scaled alpha so a nudged duck barely whispers while a fresh
+// shot leaves a readable wake. Emission is spaced by TRAVELLED DISTANCE, so it
+// follows launches, bounces, blast shoves and collision knocks alike — and
+// stops by itself the moment the duck does.
+const TRAIL_SPACING = 18;    // px between puffs — close enough to merge into a band
+const TRAIL_MIN_SPEED = 90;  // below this a duck is settling, not moving
+const TRAIL_LIFE = 0.28;     // s — short, so the wake never clutters the lane
+const TRAIL_R0 = 21;         // birth radius, well inside the ~92px duck body
+const TRAIL_SHRINK = 0.4;    // radius share left at death
+const TRAIL_ALPHA_LO = 0.14; // wake strength at drift speed…
+const TRAIL_ALPHA_HI = 0.3;  // …ramping to this at full launch speed
+const TRAIL_MAX_PUFFS = 64; // safety cap — a full-speed wake alone runs ~42
+
 const quadOut = (t: number): number => 1 - (1 - t) * (1 - t);
 
 // aim visuals. Spacing/start/crawl are the official example's (0.4/0.42 ppu,
@@ -239,20 +256,40 @@ const AIM_PULL_MAX_T = 0.65;
 
 // ── HUD ─────────────────────────────────────────────────────────────────────
 // Everything lives in the strip ABOVE the tub (main.ts puts the rim at y=200),
-// so the counters can never sit over the playfield. The plate is the pack's own
-// 291x116 currency plate and the type is its Cherry Bomb display face.
+// so the counters can never sit over the playfield.
+//
+// The bar is the board reassembly's "GAME HUD BAR", rebuilt to its measurements:
+// a dark slate panel carrying MOVES as white digit tiles on the left and a
+// GOALS inset panel on the right holding one icon per goal type with its
+// REMAINING count. Numbers below are the reference's own, in its units; only
+// the bar width changes, because that layout reserves 152px on the left for a
+// player avatar and this game has no avatar to put there.
+//
+// This also collapses what used to be three separate plates (pearls | moves |
+// crates) into two groups, which is what frees the row for the CTA and mute
+// chips.
 /** the family name we register the woff2 under — the file's own is irrelevant */
 const HUD_FONT = 'CherryBomb';
-const HUD_ROW_Y = 112;
-const MOVES_X = 360;
-const MOVES_PLATE_SCALE = 0.72;
-const GOAL_X = 566;
-const GOAL_PLATE_SCALE = 0.5;
-// The pearl counter mirrors the crate counter about the moves plate. Measured
-// occupancy of the row: moves 255..465, crates 493..639 — so 154 puts the pearl
-// plate at 81..227, symmetric with the crates and clear of everything.
-const PEARL_X = 154;
-const PEARL_PLATE_SCALE = 0.5;
+/** bar geometry, centred on the 720-wide design canvas */
+const BAR_W = 620, BAR_H = 118, BAR_X = 360, BAR_TOP = 46;
+const BAR_RADIUS = 18;
+/** reference palette */
+const BAR_TOP_COL = '#615c78', BAR_BOT_COL = '#565169';
+const BAR_EDGE = '#3f3a54';
+const INSET_TOP_COL = '#b5aed4', INSET_BOT_COL = '#a49cc4';
+/** digit tile: 50x92, gap 5, and its own palette */
+const TILE_W = 50, TILE_H = 92, TILE_GAP = 5, TILE_RADIUS = 8;
+const TILE_EDGE = '#a9a1c4';
+const TILE_INK = 0x4a4571;
+/** the moves group protrudes this far above the bar's top edge (reference -26) */
+const MOVES_RISE = 26;
+/** goal icons are 52 square in the reference; the count sits at their lower-right */
+const GOAL_ICON = 52, GOAL_GAP = 44;
+// reference: `left:32px; bottom:-2px` against the 52-square icon, so the count
+// hangs off its lower right and drops 2px below it
+const GOAL_COUNT_DX = 32, GOAL_COUNT_DY = 2;
+/** section labels: 18px, 1.5 letter-spacing, white with a soft drop */
+const HUD_LABEL_SIZE = 20;
 /** the counter number punches this big for a beat whenever it changes */
 const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
 
@@ -263,6 +300,85 @@ async function loadTexture(url: string): Promise<Texture> {
   img.src = url;
   await img.decode();
   return Texture.from(img);
+}
+
+/** oversample the baked HUD panels so their corners stay clean when scaled */
+const PANEL_SS = 3;
+
+function roundRectPath(
+  c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number,
+): void {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+interface PanelSpec {
+  w: number; h: number; r: number;
+  /** vertical gradient stops, [offset 0..1, css colour] */
+  fill: Array<[number, string]>;
+  edge?: { colour: string; width: number };
+  /** CSS `inset 0 Npx 0 rgba(...)`: a band hugging the top (+) or bottom (−) */
+  insets?: Array<{ y: number; colour: string }>;
+  /** CSS `0 Npx 0 rgba(...)`: a hard drop, baked in by inflating the canvas */
+  drop?: { y: number; colour: string };
+}
+
+/**
+ * Bake one of the reassembly's CSS boxes into a texture.
+ *
+ * Those boxes are a vertical gradient, a solid border, and a stack of hard
+ * inset/outset shadows. Pixi has no box-shadow and its Graphics gradients do
+ * not do multi-stop verticals cleanly, so each panel is drawn once through the
+ * 2D canvas API instead — which reproduces the spec exactly rather than
+ * approximating it. They are static, so this costs one draw at startup.
+ */
+function panelTexture(spec: PanelSpec): Texture {
+  const drop = spec.drop?.y ?? 0;
+  const cv = document.createElement('canvas');
+  cv.width = spec.w * PANEL_SS;
+  cv.height = (spec.h + drop) * PANEL_SS;
+  const c = cv.getContext('2d')!;
+  c.scale(PANEL_SS, PANEL_SS);
+
+  if (spec.drop) {
+    c.fillStyle = spec.drop.colour;
+    roundRectPath(c, 0, spec.drop.y, spec.w, spec.h, spec.r);
+    c.fill();
+  }
+  const g = c.createLinearGradient(0, 0, 0, spec.h);
+  for (const [at, colour] of spec.fill) g.addColorStop(at, colour);
+  c.fillStyle = g;
+  roundRectPath(c, 0, 0, spec.w, spec.h, spec.r);
+  c.fill();
+
+  // the inset bands are clipped to the panel so they follow its corners
+  if (spec.insets?.length) {
+    c.save();
+    roundRectPath(c, 0, 0, spec.w, spec.h, spec.r);
+    c.clip();
+    for (const band of spec.insets) {
+      c.fillStyle = band.colour;
+      if (band.y > 0) c.fillRect(0, 0, spec.w, band.y);
+      else c.fillRect(0, spec.h + band.y, spec.w, -band.y);
+    }
+    c.restore();
+  }
+  if (spec.edge) {
+    c.strokeStyle = spec.edge.colour;
+    c.lineWidth = spec.edge.width;
+    // stroke inside the box, matching CSS border-box
+    roundRectPath(
+      c, spec.edge.width / 2, spec.edge.width / 2,
+      spec.w - spec.edge.width, spec.h - spec.edge.width, spec.r,
+    );
+    c.stroke();
+  }
+  return Texture.from(cv);
 }
 
 /**
@@ -311,6 +427,13 @@ export class GameScene {
   private starTex!: Texture;
   /** soft white disc standing in for the official's blurred `foam` sprite */
   private blobTex!: Texture;
+  /** motion-trail puffs live here — under the ducks, so the wake reads behind */
+  private trailLayer = new Container();
+  /** where each duck last dropped a trail puff */
+  private trailLast = new Map<number, { x: number; y: number }>();
+  /** live puffs, advanced every frame in syncViews; sprites recycle via the pool */
+  private trailPuffs: Array<{ s: Sprite; t: number; a: number }> = [];
+  private trailPool: Sprite[] = [];
   /** sim ducks awaiting their staggered spawn view (official drainSpawnQueue) */
   private spawnQueue: Duck[] = [];
   /** seconds until the next queued spawn view may appear */
@@ -332,13 +455,18 @@ export class GameScene {
   /** pointerId that owns the current grab — other pointers are ignored */
   private activePointer: number | null = null;
   /** HUD readouts, built in init and driven purely by sim events */
-  private movesText!: Text;
+  private movesDigits: Text[] = [];
   private goalText!: Text;
   private pearlText!: Text;
-  /** plate + pearl icon + count; hidden wholesale on a level with no clams */
+  private clamIcon!: Sprite;
+  private crateIcon!: Sprite;
+  /** centre of the GOALS inset and the icon row's top, resolved in buildHud */
+  private goalsCentre = BAR_X;
+  private goalsIconY = BAR_TOP + 10;
+  /** clam icon + count; hidden wholesale on a level with no clams */
   private pearlGroup = new Container();
   /** where a spilled pearl flies to — set once the HUD is laid out */
-  private pearlTarget = { x: PEARL_X - 54, y: HUD_ROW_Y - 2 };
+  private pearlTarget = { x: BAR_X, y: BAR_TOP + 60 };
   /** in-flight pearls by clam id; `pearlCollected` lands the matching one */
   private pearlFlights = new Map<number, () => void>();
 
@@ -386,7 +514,7 @@ export class GameScene {
     this.crescent.addChild(cb, cf);
     this.crescent.visible = false;
     this.aimUnder.addChild(this.aimLine, this.crescent);
-    this.app.stage.addChild(this.aimUnder, this.layer, this.fx, this.hud);
+    this.app.stage.addChild(this.aimUnder, this.trailLayer, this.layer, this.fx, this.hud);
     await this.buildHud();
 
     // The rig's `active-ring` and `aim` skins ship ZERO attachments — they exist
@@ -755,6 +883,7 @@ export class GameScene {
           // leave it pointing at a dead id
           if (this.targetedDuck === e.id) this.targetedDuck = null;
           this.turning.delete(e.id);
+          this.trailLast.delete(e.id);
           this.popDuck(v);
         }
         this.flashOn.delete(e.id);
@@ -838,7 +967,8 @@ export class GameScene {
         break;
       case 'pearlCounter':
         this.pearlGroup.visible = e.total > 0;
-        this.setCounter(this.pearlText, `${e.left}/${e.total}`);
+        // the reference shows what is LEFT to do, not a done/total fraction
+        this.setCounter(this.pearlText, String(e.left));
         break;
       case 'bumperHit':
         // fires on every glancing contact, so it stays to one cheap star
@@ -848,10 +978,11 @@ export class GameScene {
         console.log(`level ${e.index + 1}: ${e.name} — ${e.moves} moves`);
         break;
       case 'movesLeft':
-        this.setCounter(this.movesText, String(e.left));
+        this.setMoves(e.left);
         break;
       case 'counter':
-        this.setCounter(this.goalText, `${e.done}/${e.total}`);
+        // crates REMAINING, to read the same way as the pearl count beside it
+        this.setCounter(this.goalText, String(Math.max(0, e.total - e.done)));
         break;
       case 'levelCleared': {
         console.log(`level ${e.index + 1} CLEARED with ${e.movesLeft} moves to spare`);
@@ -897,6 +1028,8 @@ export class GameScene {
     this.spawnTimer = 0;
     this.spawning.clear();
     this.pearlFlights.clear();
+    // the new level may not have clams, so the goal row re-centres on what it has
+    this.layoutGoals();
     this.ringMode.clear();
     this.aimBoneRot.clear();
     this.targetedDuck = null;
@@ -911,6 +1044,14 @@ export class GameScene {
     this.aimLine.clear();
     this.crescent.visible = false;
     for (const d of this.dotPool) d.visible = false;
+    // wipe the motion trail: ids restart from 1 next level, and a stale anchor
+    // under a reused id would paint a streak from the old duck's last position
+    for (const p of this.trailPuffs) {
+      this.trailLayer.removeChild(p.s);
+      this.trailPool.push(p.s);
+    }
+    this.trailPuffs.length = 0;
+    this.trailLast.clear();
     this.app.stage.position.set(0, 0); // drop any shake offset mid-flight
 
     // a per-level seed keeps every level's respawns deterministic on their own
@@ -1390,11 +1531,22 @@ export class GameScene {
   }
 
   /**
-   * The counters, built from the pack's own UI: the 291x116 currency plate as
-   * the backing for both chips, the goal-Barrel icon overlapping the goal chip
-   * the way the real HUD hangs its icons, and Cherry Bomb for the type.
+   * The board reassembly's GAME HUD BAR, rebuilt to its own measurements.
    *
-   * The whole row is pinned to the strip above the tub rim (y=200 in main.ts),
+   * Geometry is lifted straight off the reference rather than eyeballed: the
+   * reassembly's boxes were rendered and read back as bar 622x118, first digit
+   * tile at +155,+14 (50x92, gap 5), goals inset at +276,+10 (323x98). Those
+   * offsets are reproduced below against our own bar width — the one number
+   * that had to change, because the reference reserves 152px on its left for a
+   * player avatar and this game has none. Dropping that reserve is why the bar
+   * is 560 rather than 622; everything inside keeps the reference's sizes.
+   *
+   * GOALS holds one icon per goal type with its REMAINING count at the icon's
+   * lower right, which is the reference's own reading — not the done/total the
+   * old chips showed. Clams and crates are the two types, and the reassembly
+   * assigns goal-Bumper and goal-Barrel to exactly them.
+   *
+   * The whole bar is pinned to the strip above the tub rim (y=200 in main.ts),
    * so it can never sit over live water.
    */
   private async buildHud(): Promise<void> {
@@ -1403,59 +1555,147 @@ export class GameScene {
     // a frame early bakes a fallback-font texture and never re-renders itself.
     document.fonts.add(await new FontFace(HUD_FONT, `url("${cherryBombUrl}")`).load());
 
-    const plateTex = await loadTexture(platePageUrl);
-    const chip = (x: number, scale: number): Sprite => {
-      const s = new Sprite(plateTex);
-      s.anchor.set(0.5);
-      s.scale.set(scale);
-      s.position.set(x, HUD_ROW_Y);
-      return s;
-    };
-    const label = (size: number, stroke: number): Text => {
+    const left = BAR_X - BAR_W / 2;
+    const bar = new Sprite(panelTexture({
+      w: BAR_W, h: BAR_H, r: BAR_RADIUS,
+      fill: [[0, BAR_TOP_COL], [1, BAR_BOT_COL]],
+      edge: { colour: BAR_EDGE, width: 3 },
+      insets: [
+        { y: 3, colour: 'rgba(255,255,255,.14)' },
+        { y: -4, colour: 'rgba(0,0,0,.18)' },
+      ],
+      drop: { y: 4, colour: 'rgba(40,35,70,.35)' },
+    }));
+    bar.width = BAR_W;
+    bar.height = BAR_H + 4;
+    bar.position.set(left, BAR_TOP);
+    // the backing goes down FIRST: everything below draws on top of it
+    this.hud.addChild(bar);
+
+    // content box, per the reference's 3px border + 20px side padding
+    const inLeft = left + 23;
+    const inRight = left + BAR_W - 23;
+
+    const label = (text: string, cx: number): Text => {
       const t = new Text({
-        text: '',
+        text,
         style: {
-          fontFamily: HUD_FONT, fontSize: size, fill: 0xffffff, align: 'center',
-          stroke: { color: 0x2f2440, width: stroke, join: 'round' },
+          fontFamily: HUD_FONT, fontSize: HUD_LABEL_SIZE, fill: 0xffffff, align: 'center',
+          letterSpacing: 1.5,
+          dropShadow: { color: 0x000000, alpha: 0.25, blur: 0, angle: Math.PI / 2, distance: 2 },
         },
       });
       t.anchor.set(0.5);
+      // both labels straddle the bar's top edge in the reference
+      t.position.set(cx, BAR_TOP - 2);
       return t;
     };
 
-    const movesLabel = label(28, 6);
-    movesLabel.text = 'MOVES';
-    movesLabel.position.set(MOVES_X, HUD_ROW_Y - 68);
-    this.movesText = label(54, 8);
-    this.movesText.position.set(MOVES_X, HUD_ROW_Y);
+    // ── MOVES: two digit tiles, zero-padded, exactly as the reference pads ──
+    const tileTex = panelTexture({
+      w: TILE_W, h: TILE_H, r: TILE_RADIUS,
+      fill: [[0, '#ffffff'], [0.52, '#ffffff'], [0.72, '#f2effc'], [1, '#d8d2ec']],
+      edge: { colour: TILE_EDGE, width: 2 },
+      insets: [{ y: -5, colour: 'rgba(120,108,160,.22)' }],
+      drop: { y: 2, colour: 'rgba(47,41,72,.4)' },
+    });
+    const tilesW = TILE_W * 2 + TILE_GAP;
+    const tileY = BAR_TOP + 14;
+    this.movesDigits = [];
+    for (let i = 0; i < 2; i++) {
+      const x = inLeft + i * (TILE_W + TILE_GAP);
+      const tile = new Sprite(tileTex);
+      tile.width = TILE_W;
+      tile.height = TILE_H + 2;
+      tile.position.set(x, tileY);
+      const d = new Text({
+        text: '0',
+        style: { fontFamily: HUD_FONT, fontSize: 52, fill: TILE_INK, align: 'center' },
+      });
+      d.anchor.set(0.5);
+      d.position.set(x + TILE_W / 2, tileY + TILE_H / 2);
+      this.movesDigits.push(d);
+      this.hud.addChild(tile, d);
+    }
 
-    const goalIcon = new Sprite(await loadTexture(goalIconUrl));
-    goalIcon.anchor.set(0.5);
-    goalIcon.width = goalIcon.height = 66;
-    goalIcon.position.set(GOAL_X - 58, HUD_ROW_Y - 2);
-    this.goalText = label(34, 6);
-    this.goalText.position.set(GOAL_X + 20, HUD_ROW_Y);
+    // ── GOALS: the inset panel, filling the rest of the bar (CSS `flex:1`) ──
+    const insetX = inLeft + tilesW + 16;
+    const insetW = inRight - insetX;
+    const insetY = BAR_TOP + 10;
+    const inset = new Sprite(panelTexture({
+      w: insetW, h: 98, r: 14,
+      fill: [[0, INSET_TOP_COL], [1, INSET_BOT_COL]],
+      edge: { colour: BAR_EDGE, width: 3 },
+    }));
+    inset.width = insetW;
+    inset.height = 98;
+    inset.position.set(insetX, insetY);
+    this.goalsCentre = insetX + insetW / 2;
+    this.goalsIconY = insetY + (98 - GOAL_ICON) / 2;
 
-    // The icon is the pearl ITSELF, not goal-Bumper: the objective counts pearls,
-    // and a flying pearl landing on its own likeness is what sells the link
-    // between the spill and the number dropping. (goal-Bumper belongs to a "hit
-    // the bumper N times" objective, which is a different goal entirely.)
-    const pearlIcon = new Sprite(this.pearlTex);
-    pearlIcon.anchor.set(0.5);
-    pearlIcon.width = pearlIcon.height = 52;
-    pearlIcon.position.set(PEARL_X - 54, HUD_ROW_Y - 2);
-    this.pearlText = label(34, 6);
-    this.pearlText.position.set(PEARL_X + 22, HUD_ROW_Y);
-    // where a spilled pearl flies to — the icon, so it lands on the counter
-    this.pearlTarget = { x: PEARL_X - 54, y: HUD_ROW_Y - 2 };
-    // a level with no clams shows no pearl counter at all
-    this.pearlGroup.addChild(chip(PEARL_X, PEARL_PLATE_SCALE), pearlIcon, this.pearlText);
+    const count = (): Text => {
+      const t = new Text({
+        text: '',
+        style: {
+          // reference: 20px, and a 2px outline built from an 8-way text-shadow
+          fontFamily: HUD_FONT, fontSize: 20, fill: 0xffffff, align: 'left',
+          stroke: { color: 0x35304a, width: 4, join: 'round' },
+        },
+      });
+      t.anchor.set(0, 1); // the reference pins the count by its bottom-left
+      return t;
+    };
 
+    const clamIcon = new Sprite(await loadTexture(clamIconUrl));
+    clamIcon.width = clamIcon.height = GOAL_ICON;
+    this.pearlText = count();
+    this.pearlGroup.addChild(clamIcon, this.pearlText);
+    this.clamIcon = clamIcon;
+
+    const crateIcon = new Sprite(await loadTexture(goalIconUrl));
+    crateIcon.width = crateIcon.height = GOAL_ICON;
+    this.crateIcon = crateIcon;
+    this.goalText = count();
+
+    // z-order: the bar is already down; the inset sits on it, the icons and
+    // counts on the inset, and the labels last so they read over the top edge
     this.hud.addChild(
-      chip(MOVES_X, MOVES_PLATE_SCALE), movesLabel, this.movesText,
-      chip(GOAL_X, GOAL_PLATE_SCALE), goalIcon, this.goalText,
+      inset,
+      crateIcon, this.goalText,
       this.pearlGroup,
+      label('MOVES', inLeft + tilesW / 2),
+      label('GOALS', insetX + insetW / 2),
     );
+    this.layoutGoals();
+  }
+
+  /**
+   * Place the goal icons inside the inset. The reference centres a fixed pair
+   * with a 44px gap; a level with no clams shows the crate alone, so the row
+   * re-centres on whatever it actually has rather than leaving a hole where the
+   * clam would be.
+   */
+  private layoutGoals(): void {
+    const showClam = this.director.level.pearls > 0;
+    this.pearlGroup.visible = showClam;
+    const span = showClam ? GOAL_ICON * 2 + GOAL_GAP : GOAL_ICON;
+    let x = this.goalsCentre - span / 2;
+    const y = this.goalsIconY;
+    if (showClam) {
+      this.clamIcon.position.set(x, y);
+      this.pearlText.position.set(x + GOAL_COUNT_DX, y + GOAL_ICON + GOAL_COUNT_DY);
+      // where a spilled pearl flies to — its own icon, so it lands on the count
+      this.pearlTarget = { x: x + GOAL_ICON / 2, y: y + GOAL_ICON / 2 };
+      x += GOAL_ICON + GOAL_GAP;
+    }
+    this.crateIcon.position.set(x, y);
+    this.goalText.position.set(x + GOAL_COUNT_DX, y + GOAL_ICON + GOAL_COUNT_DY);
+  }
+
+  /** MOVES is two tiles, so the number is set a digit at a time. */
+  private setMoves(left: number): void {
+    const s = String(Math.max(0, left)).padStart(2, '0').slice(-2);
+    for (const [i, d] of this.movesDigits.entries()) this.setCounter(d, s[i]!);
   }
 
   /** Set a counter and punch it, so a spent move or a cleared goal is felt. */
@@ -1540,13 +1780,84 @@ export class GameScene {
         v.position.set(d.x, d.y);
         if (d.matched) this.syncMatchFlash(d, v);
         v.update(dt);
+        this.syncTrail(d);
       }
     }
+    this.advanceTrail(dt);
     for (const [, v] of this.barrelViews) v.update(dt);
     // clams never move, but the shut pose, the open beats and the water ring
     // all need ticking (autoUpdate is off on every rig in this scene)
     for (const [, v] of this.clamViews) v.update(dt);
     if (this.hand?.visible) this.hand.update(dt);
+  }
+
+  /**
+   * Drop a foam puff every TRAIL_SPACING px of a moving duck's travel. A fast
+   * duck covers several spacings per render frame, so the emission walks the
+   * whole segment — otherwise a full-speed shot would leave a dashed gap trail.
+   * Distance-driven, so it needs no per-cause wiring: launches, wall bounces,
+   * blast shoves and collision knocks all move the duck, and a still duck (or
+   * the hitstop freeze) emits nothing, which is what makes the trail vanish on
+   * its own once the duck stops.
+   */
+  private syncTrail(d: Duck): void {
+    const last = this.trailLast.get(d.id);
+    if (!last) {
+      // first sight (spawn or level swap): anchor without emitting, so a view
+      // appearing far from a stale anchor can never paint a streak across the tub
+      this.trailLast.set(d.id, { x: d.x, y: d.y });
+      return;
+    }
+    const speed = Math.hypot(d.vx, d.vy);
+    if (speed < TRAIL_MIN_SPEED) {
+      last.x = d.x;
+      last.y = d.y;
+      return;
+    }
+    let dx = d.x - last.x;
+    let dy = d.y - last.y;
+    let dist = Math.hypot(dx, dy);
+    while (dist >= TRAIL_SPACING) {
+      last.x += (dx / dist) * TRAIL_SPACING;
+      last.y += (dy / dist) * TRAIL_SPACING;
+      this.emitTrailPuff(last.x, last.y, speed);
+      dx = d.x - last.x;
+      dy = d.y - last.y;
+      dist = Math.hypot(dx, dy);
+    }
+  }
+
+  private emitTrailPuff(x: number, y: number, speed: number): void {
+    if (this.trailPuffs.length >= TRAIL_MAX_PUFFS) return; // stay uncluttered
+    let s = this.trailPool.pop();
+    if (!s) {
+      s = new Sprite(this.blobTex);
+      s.anchor.set(0.5);
+      s.blendMode = 'add'; // additive white on the blue water = soft foam
+    }
+    s.position.set(x, y);
+    s.width = s.height = TRAIL_R0 * 2;
+    const k = Math.min(1, speed / SIM.LAUNCH_SPEED);
+    const a = TRAIL_ALPHA_LO + (TRAIL_ALPHA_HI - TRAIL_ALPHA_LO) * k;
+    s.alpha = a;
+    this.trailLayer.addChild(s);
+    this.trailPuffs.push({ s, t: 0, a });
+  }
+
+  /** Age every live puff: shrink and fade out smoothly, then recycle. */
+  private advanceTrail(dt: number): void {
+    for (let i = this.trailPuffs.length - 1; i >= 0; i--) {
+      const p = this.trailPuffs[i]!;
+      p.t += dt;
+      const q = Math.min(1, p.t / TRAIL_LIFE);
+      p.s.width = p.s.height = TRAIL_R0 * 2 * (1 - (1 - TRAIL_SHRINK) * q);
+      p.s.alpha = p.a * (1 - quadOut(q));
+      if (q >= 1) {
+        this.trailLayer.removeChild(p.s);
+        this.trailPool.push(p.s);
+        this.trailPuffs.splice(i, 1);
+      }
+    }
   }
 
   /**
