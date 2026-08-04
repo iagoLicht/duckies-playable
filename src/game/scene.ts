@@ -96,6 +96,28 @@ const LEVEL_RETRY_DELAY = 1.4;
 // same split the ducks use.
 const CT_SHELL = 0;
 const CT_RIPPLE = 1;
+
+// ── the duck's facing ───────────────────────────────────────────────────────
+// The rig carries a `turn` animation that sweeps the duck through a FULL 360
+// degrees over its 12s: measured by parsing the .skel, the head bone's world
+// rotation runs 90deg at t=0 through 180 at t=3, 270 at t=6 and 0/360 at t=9,
+// i.e. exactly 30 deg/s, linear and wrapping. `idle` by contrast never rotates
+// it at all, which is why every duck used to stare straight at the camera
+// whichever way it was aimed.
+//
+// So the facing is not animated, it is SCRUBBED: the track is pinned at
+// timeScale 0 and its trackTime is set from the aim angle every frame.
+// Verified against pixels at four quarter-turns — t=3 genuinely shows the
+// duck's back, with no face at all.
+const TURN_DEG_PER_SEC = 30;
+/**
+ * Screen aim angle -> `turn` trackTime. The rig turns the opposite way to
+ * screen-space (its y is up, the stage's is down), so the angle is negated —
+ * which is the same negation `aimBoneRot` already applies for the teardrop, and
+ * this takes that value directly rather than recomputing it.
+ */
+const turnTimeFor = (rigDeg: number): number =>
+  (((rigDeg % 360) + 360) % 360) / TURN_DEG_PER_SEC;
 /** the official's bumper-hit burst tint on this rig */
 const CLAM_TINT = 0xFFB0D9;
 // When the shell is ACTUALLY open: `bump` re-attaches the lid and the mouth for
@@ -235,6 +257,8 @@ export class GameScene {
   private ringMode = new Map<number, 'ring' | 'aim'>();
   /** aim-teardrop rotation (deg, rig space) applied per duck before world transforms */
   private aimBoneRot = new Map<number, number>();
+  /** ducks posed by the rig's `turn` (facing the shot) instead of idling */
+  private turning = new Set<number>();
   /** pooled trajectory-dot sprites (official aim-dot), laid out each frame */
   private dotPool: Sprite[] = [];
   /** the aim UI layer — dots, crescent, X — sits UNDER the ducks like the official */
@@ -507,6 +531,11 @@ export class GameScene {
       } else {
         this.setRingMode(d.id, v, null);
       }
+      // Let go without firing — a refused shot on the red X, or a pull under the
+      // whiff threshold — and the duck never becomes live, so `duckStopped`
+      // never comes for it. Without this it would sit frozen in its aim facing
+      // for the rest of the level.
+      if (d.id !== held && !d.live) this.setTurn(d.id, v, null);
     }
     // steer the sling: rotate the assembly toward the (assist-bent) launch
     // direction and scrub the stretch by how far the player has pulled
@@ -519,7 +548,11 @@ export class GameScene {
           const dx = b.x - a.x, dy = b.y - a.y;
           if (dx !== 0 || dy !== 0) {
             // rig space is y-up, stage y-down: negate the screen angle
-            this.aimBoneRot.set(held, (-Math.atan2(dy, dx) * 180) / Math.PI);
+            const rigDeg = (-Math.atan2(dy, dx) * 180) / Math.PI;
+            this.aimBoneRot.set(held, rigDeg);
+            // …and turn the duck itself to face the same way, so pulling back
+            // toward yourself shows you its back rather than its eyes
+            if (hv) this.setTurn(held, hv, rigDeg);
           }
         }
         const entry = hv.state.getCurrent(T_RING);
@@ -531,6 +564,34 @@ export class GameScene {
           entry.trackTime = stretch * entry.animation.duration;
         }
       }
+    }
+  }
+
+  /**
+   * Point the duck along the shot. `turn` replaces `idle` on the body track and
+   * is held at timeScale 0 — nothing about it plays, it is a lookup table for
+   * facings that we index with trackTime (see turnTimeFor).
+   *
+   * Passing null hands the body back to `idle`. That is deliberately NOT done on
+   * release: a duck that snapped back to front-on the instant it launched would
+   * pop, so the facing is kept through the flight and only surrendered once the
+   * sim reports the duck stopped.
+   */
+  private setTurn(id: number, v: Spine, rigDeg: number | null): void {
+    if (rigDeg === null) {
+      if (!this.turning.delete(id)) return;
+      v.state.setAnimation(T_BODY, 'idle', true);
+      return;
+    }
+    if (!this.turning.has(id)) {
+      v.state.setAnimation(T_BODY, 'turn', true).timeScale = 0;
+      this.turning.add(id);
+    }
+    const entry = v.state.getCurrent(T_BODY);
+    // guard the name: a `jump` or `dance` can be stacked on this track by other
+    // code paths, and scrubbing THAT would freeze it mid-pose
+    if (entry && entry.animation?.name === 'turn') {
+      entry.trackTime = turnTimeFor(rigDeg);
     }
   }
 
@@ -569,6 +630,14 @@ export class GameScene {
         // this file already tolerates that
         this.spawnQueue.push(e.duck);
         break;
+      case 'duckStopped': {
+        // the shot is over: give the body back to the idle loop. Held until now
+        // so the duck keeps facing the way it was fired for the whole flight
+        // rather than snapping front-on the instant it leaves the sling.
+        const v = this.duckViews.get(e.id);
+        if (v) this.setTurn(e.id, v, null);
+        break;
+      }
       case 'duckMatched': {
         const v = this.duckViews.get(e.id);
         const d = this.director.world.ducks.find((k) => k.id === e.id);
@@ -587,6 +656,7 @@ export class GameScene {
           this.duckViews.delete(e.id);
           this.ringMode.delete(e.id);
           this.aimBoneRot.delete(e.id);
+          this.turning.delete(e.id);
           this.popDuck(v);
         }
         this.flashOn.delete(e.id);
@@ -731,6 +801,7 @@ export class GameScene {
     this.pearlFlights.clear();
     this.ringMode.clear();
     this.aimBoneRot.clear();
+    this.turning.clear();
     this.flashOn.clear();
     this.flashSlots.clear();
     this.hitstop = 0;
