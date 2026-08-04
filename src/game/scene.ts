@@ -585,9 +585,6 @@ export class GameScene {
   private pearlText!: Text;
   private clamIcon!: Sprite;
   private crateIcon!: Sprite;
-  /** green ticks that take a goal count's place the moment it reaches zero */
-  private goalCheck!: Graphics;
-  private pearlCheck!: Graphics;
   /** centre of the GOALS inset and the icon row's top, resolved in buildHud */
   private goalsCentre = BAR_X;
   private goalsIconY = BAR_TOP + 10;
@@ -1160,7 +1157,7 @@ export class GameScene {
       case 'pearlCounter':
         this.pearlGroup.visible = e.total > 0;
         // the reference shows what is LEFT to do, not a done/total fraction
-        this.setGoal(this.pearlText, this.pearlCheck, e.left);
+        this.setCounter(this.pearlText, String(e.left));
         break;
       case 'bumperHit':
         // fires on every glancing contact, so it stays to one cheap star
@@ -1179,7 +1176,7 @@ export class GameScene {
         break;
       case 'counter':
         // crates REMAINING, to read the same way as the pearl count beside it
-        this.setGoal(this.goalText, this.goalCheck, Math.max(0, e.total - e.done));
+        this.setCounter(this.goalText, String(Math.max(0, e.total - e.done)));
         break;
       case 'levelCleared': {
         console.log(`level ${e.index + 1} CLEARED with ${e.movesLeft} moves to spare`);
@@ -1891,33 +1888,14 @@ export class GameScene {
       return s;
     };
 
-    // The tick that replaces a count at zero: drawn (no check asset ships in
-    // the pack), in the count's own visual language — the same dark outline
-    // the numbers wear, filled with the game's ring green. Centred on its own
-    // origin so the punch scales it in place, like the numbers do.
-    const goalCheck = (): Graphics => {
-      const s = GOAL_ICON * (26 / 52); // a touch bigger than the count it replaces
-      const path = (g: Graphics): Graphics => g
-        .moveTo(-0.42 * s, 0.04 * s)
-        .lineTo(-0.1 * s, 0.34 * s)
-        .lineTo(0.44 * s, -0.3 * s);
-      const g = new Graphics();
-      path(g).stroke({ width: 0.52 * s, color: 0x35304a, cap: 'round', join: 'round' });
-      path(g).stroke({ width: 0.28 * s, color: TINTS.green, cap: 'round', join: 'round' });
-      g.visible = false;
-      return g;
-    };
-
     const clamIcon = await goalIcon(clamIconUrl);
     this.pearlText = count();
-    this.pearlCheck = goalCheck();
-    this.pearlGroup.addChild(clamIcon, this.pearlText, this.pearlCheck);
+    this.pearlGroup.addChild(clamIcon, this.pearlText);
     this.clamIcon = clamIcon;
 
     const crateIcon = await goalIcon(goalIconUrl);
     this.crateIcon = crateIcon;
     this.goalText = count();
-    this.goalCheck = goalCheck();
 
     // ── the avatar, breaking out of the bar's top-left ──
     const frameX = left + AVATAR_DX, frameY = BAR_TOP + AVATAR_DY;
@@ -1957,7 +1935,7 @@ export class GameScene {
     // counts on the inset, and the labels last so they read over the top edge
     this.hud.addChild(
       inset,
-      crateIcon, this.goalText, this.goalCheck,
+      crateIcon, this.goalText,
       this.pearlGroup,
       frame, avatar, lip,
       label('TIMER', tilesX + tilesW / 2),
@@ -2066,62 +2044,30 @@ export class GameScene {
     const span = showClam ? cw + GOAL_GAP + bw : bw;
     let x = this.goalsCentre - span / 2;
     const y = this.goalsIconY;
-    // the tick sits centred over the digits' spot: the count anchors its
-    // bottom-left at the icon's lower right, so the middle of a one-or-two
-    // digit number is up and right of that anchor by about half a cap
-    const checkAt = (g: Graphics, ax: number, ay: number): void => {
-      g.position.set(ax + GOAL_ICON * (12 / 52), ay - GOAL_ICON * (10 / 52));
-    };
     if (showClam) {
       this.clamIcon.position.set(x, y);
       this.pearlText.position.set(x + cw * (32 / 52), y + GOAL_ICON + GOAL_COUNT_DY);
-      checkAt(this.pearlCheck, this.pearlText.x, this.pearlText.y);
       // where a spilled pearl flies to — its own icon, so it lands on the count
       this.pearlTarget = { x: x + cw / 2, y: y + GOAL_ICON / 2 };
       x += cw + GOAL_GAP;
     }
     this.crateIcon.position.set(x, y);
     this.goalText.position.set(x + bw * (32 / 52), y + GOAL_ICON + GOAL_COUNT_DY);
-    checkAt(this.goalCheck, this.goalText.x, this.goalText.y);
   }
 
   /** Set a counter and punch it, so a cleared goal is felt. */
   private setCounter(t: Text, value: string): void {
     if (t.text === value) return;
     t.text = value;
-    this.punchNode(t);
-  }
-
-  /**
-   * A goal's remaining count — and, at zero, the number gives way to the green
-   * tick (punched in the same way, so "done" lands with the same beat every
-   * other count change has). A level load runs the same path backwards: the
-   * fresh counter event brings the number back and hides the tick.
-   */
-  private setGoal(t: Text, check: Graphics, left: number): void {
-    if (left > 0) {
-      check.visible = false;
-      t.visible = true;
-      this.setCounter(t, String(left));
-      return;
-    }
-    t.visible = false;
-    if (!check.visible) {
-      check.visible = true;
-      this.punchNode(check);
-    }
-  }
-
-  /** The counters' scale punch — out then back, Quad.easeOut each leg. */
-  private punchNode(n: { scale: { set(v: number): unknown } }): void {
     let e = 0;
     const anim = (tk: { deltaMS: number }): void => {
       e += tk.deltaMS / 1000;
+      // out then back, Quad.easeOut each leg — the duck punch's shape
       const leg = e < HUD_PUNCH_TIME ? e / HUD_PUNCH_TIME : 1 - (e - HUD_PUNCH_TIME) / HUD_PUNCH_TIME;
-      n.scale.set(1 + (HUD_PUNCH - 1) * quadOut(Math.max(0, leg)));
+      t.scale.set(1 + (HUD_PUNCH - 1) * quadOut(Math.max(0, leg)));
       if (e >= HUD_PUNCH_TIME * 2) {
         this.app.ticker.remove(anim);
-        n.scale.set(1);
+        t.scale.set(1);
       }
     };
     this.app.ticker.add(anim);
