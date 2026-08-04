@@ -378,7 +378,17 @@ const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
  * level is still decided by the move budget, which the sim enforces and the
  * HUD no longer shows. See the endcard spec for the fail path this wants.
  */
-const LEVEL_SECONDS = 60;
+const LEVEL_SECONDS = 30;
+/** at and below this many seconds the digits go red and stay red */
+const TIMER_URGENT = 10;
+/** the game's own red — the red duck's, off the pack's colour table */
+const TIMER_URGENT_INK = 0xec273f;
+/**
+ * One digit roll. Short enough that it can never collide with the next second
+ * (a roll is 16% of the gap between ticks) but long enough to read as motion
+ * rather than as a flicker.
+ */
+const FLIP_TIME = 0.16;
 
 /** Decode an image URL (path or data URI) into a Pixi texture — same one code
  *  path for dev URLs and the build's inlined data URIs. */
@@ -475,6 +485,27 @@ function panelTexture(spec: PanelSpec): Texture {
  * stage. (hp4/hp5 poses — three and four straps — are deliberately unused:
  * two straps is the deepest stage this game deals.)
  */
+/**
+ * One tile's worth of split-flap. Two Texts share a masked box the size of the
+ * tile: `cur` is the digit on screen, `out` is the one leaving. They swap roles
+ * every roll rather than being created per tick, so a 30-second countdown costs
+ * four Texts for its whole life.
+ */
+interface DigitRoller {
+  box: Container;
+  cur: Text;
+  out: Text;
+  /**
+   * The ink both Texts are currently carrying. Tracked here rather than read
+   * back off `style.fill`, which Pixi normalises into its own fill object, and
+   * written only when it actually changes — assigning it re-rasterises the
+   * glyph, which is not something to do twice a second for no reason.
+   */
+  ink: number;
+  /** the running ticker fn, so a roll can be cut short by the next one */
+  anim: ((t: { deltaMS: number }) => void) | null;
+}
+
 function stageFor(b: { hp: number }): string {
   return b.hp >= 3 ? 'hp3' : b.hp === 2 ? 'hp2' : 'hp1';
 }
@@ -543,8 +574,8 @@ export class GameScene {
   private aimClock = 0;
   /** pointerId that owns the current grab — other pointers are ignored */
   private activePointer: number | null = null;
-  /** the bar's two digit tiles — the countdown's seconds */
-  private clockDigits: Text[] = [];
+  /** the bar's two digit tiles — the countdown's seconds, one roller each */
+  private clockTiles: DigitRoller[] = [];
   private goalText!: Text;
   private pearlText!: Text;
   private clamIcon!: Sprite;
@@ -1197,7 +1228,7 @@ export class GameScene {
     this.pearlFlights.clear();
     // the new level may not have clams, so the goal row re-centres on what it has
     this.layoutGoals();
-    this.setTimer(LEVEL_SECONDS);
+    this.setTimer(LEVEL_SECONDS, true);
     this.ringMode.clear();
     this.aimBoneRot.clear();
     this.targetedDuck = null;
@@ -1775,22 +1806,40 @@ export class GameScene {
     const tilesW = TILE_W * 2 + TILE_GAP;
     const tilesX = left + MOVES_DX;
     const tileY = BAR_TOP + MOVES_DY;
-    this.clockDigits = [];
+    // Each tile is a little window: the digits scroll THROUGH it, so both the
+    // one leaving and the one arriving have to be clipped to the tile's own
+    // rounded box or they paint over its corners and out onto the bar. One
+    // Graphics carries both windows and masks both boxes.
+    const clockMask = new Graphics();
+    this.clockTiles = [];
     for (let i = 0; i < 2; i++) {
       const x = tilesX + i * (TILE_W + TILE_GAP);
       const tile = new Sprite(tileTex);
       tile.width = TILE_W;
       tile.height = TILE_H + 2;
       tile.position.set(x, tileY);
-      const d = new Text({
-        text: '0',
-        style: { fontFamily: HUD_FONT, fontSize: 52 * REF_K, fill: TILE_INK, align: 'center' },
-      });
-      d.anchor.set(0.5);
-      d.position.set(x + TILE_W / 2, tileY + TILE_H / 2);
-      this.clockDigits.push(d);
-      this.hud.addChild(tile, d);
+      clockMask.roundRect(x, tileY, TILE_W, TILE_H, TILE_RADIUS).fill(0xffffff);
+
+      const digit = (): Text => {
+        const d = new Text({
+          text: '0',
+          style: { fontFamily: HUD_FONT, fontSize: 52 * REF_K, fill: TILE_INK, align: 'center' },
+        });
+        d.anchor.set(0.5);
+        d.position.set(TILE_W / 2, TILE_H / 2);
+        return d;
+      };
+      const box = new Container();
+      box.position.set(x, tileY);
+      box.mask = clockMask;
+      const cur = digit(), out = digit();
+      out.visible = false;
+      box.addChild(cur, out);
+
+      this.clockTiles.push({ box, cur, out, ink: TILE_INK, anim: null });
+      this.hud.addChild(tile, box);
     }
+    this.hud.addChild(clockMask);
 
     // ── GOALS: the inset panel, filling the rest of the bar (CSS `flex:1`) ──
     const insetX = left + INSET_DX;
@@ -1887,23 +1936,92 @@ export class GameScene {
       label('TIMER', tilesX + tilesW / 2),
       label('GOALS', insetX + insetW / 2),
     );
-    this.setTimer(LEVEL_SECONDS);
+    this.setTimer(LEVEL_SECONDS, true);
     this.layoutGoals();
   }
 
   /**
    * Point the countdown at a remaining time, a digit per tile. Also the reset
-   * path. Unlike the goal counts these are set WITHOUT the punch: they change
-   * every second, and a 1.3x pulse once a second reads as a nervous tic rather
-   * than as feedback.
+   * path — `snap` skips the roll, for building the HUD and for a level load,
+   * where the clock jumping straight to a full 30 is what you want.
+   *
+   * The DISPLAYED value is derived from `timerLeft` every call, never stepped
+   * by the animation. So a roll can be late, cut short, or dropped entirely
+   * and the number on screen is still exactly ceil(seconds remaining) — the
+   * animation cannot skip or duplicate a second because it does not own one.
    */
-  private setTimer(seconds: number): void {
+  private setTimer(seconds: number, snap = false): void {
     this.timerLeft = Math.max(0, seconds);
     // ceil, so the clock only shows 00 once time is actually gone
-    const s = String(Math.ceil(this.timerLeft)).padStart(2, '0').slice(-2);
-    for (const [i, d] of this.clockDigits.entries()) {
-      if (d.text !== s[i]) d.text = s[i]!;
+    const n = Math.ceil(this.timerLeft);
+    const s = String(n).padStart(2, '0').slice(-2);
+    const ink = n <= TIMER_URGENT ? TIMER_URGENT_INK : TILE_INK;
+    for (const [i, t] of this.clockTiles.entries()) this.rollDigit(t, s[i]!, ink, snap);
+  }
+
+  /**
+   * Scroll one tile from its current digit to a new one: the arriving digit
+   * drops in from above and the leaving one drops out below, the whole column
+   * moving one tile-height. Only a tile whose digit actually CHANGED rolls —
+   * at 29 -> 28 the tens tile holds still, the way a real flip clock does.
+   */
+  private rollDigit(t: DigitRoller, value: string, ink: number, snap: boolean): void {
+    // Urgency is applied to BOTH texts up front, so it lands whether or not
+    // this tile is the one that changes. Without that, 11 -> 10 would turn the
+    // units digit red and leave the tens dark, since only the units rolled.
+    if (t.ink !== ink) {
+      t.ink = ink;
+      t.cur.style.fill = ink;
+      t.out.style.fill = ink;
     }
+    // `cur` is the digit this tile is showing OR already rolling towards, so
+    // this is also what leaves a roll in flight alone. tickTimer calls in here
+    // every frame; without this the roll would be torn down one frame after it
+    // started and the digits would appear to snap.
+    if (t.cur.text === value) return;
+    // The target really did change, so any roll still in flight is landed
+    // rather than blended — two overlapping scrolls on one tile read as a
+    // stutter. At 0.16s against a 1s tick this only fires if the frame rate has
+    // collapsed far enough to swallow a whole second.
+    if (t.anim) {
+      this.app.ticker.remove(t.anim);
+      t.anim = null;
+      this.landRoll(t);
+    }
+    if (snap) {
+      t.cur.text = value;
+      return;
+    }
+
+    const arriving = t.out;
+    arriving.text = value;
+    arriving.visible = true;
+    arriving.position.set(TILE_W / 2, TILE_H / 2 - TILE_H);
+    const leaving = t.cur;
+    // roles swap now, so `cur` is the digit that will be on screen when this ends
+    t.cur = arriving;
+    t.out = leaving;
+
+    let e = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      e += tk.deltaMS / 1000;
+      const k = quadOut(Math.min(1, e / FLIP_TIME));
+      arriving.y = TILE_H / 2 - TILE_H * (1 - k);
+      leaving.y = TILE_H / 2 + TILE_H * k;
+      if (e >= FLIP_TIME) {
+        this.app.ticker.remove(anim);
+        t.anim = null;
+        this.landRoll(t);
+      }
+    };
+    t.anim = anim;
+    this.app.ticker.add(anim);
+  }
+
+  /** Park a roller at rest: current digit centred, spare parked and hidden. */
+  private landRoll(t: DigitRoller): void {
+    t.cur.position.set(TILE_W / 2, TILE_H / 2);
+    t.out.visible = false;
   }
 
   /**
