@@ -308,13 +308,18 @@ const AIM_PULL_MAX_T = 0.65;
  * The two faces we register the woff2s under — the files' own names are
  * irrelevant. Both are the pack's, and the manifest assigns them:
  *  - CherryBombOne: "Primary display/title face (rounded bubbly). Headers/CTA/
- *    score." Used for the digits and the goal counts.
- *  - asap-semicondensed-black: "Heavy condensed number/counter font." Used for
- *    the MOVES / GOALS section labels, which in the real HUD are a heavy
- *    condensed sans rather than the bubbly face.
+ *    score."
+ *  - asap-semicondensed-black: "Heavy condensed number/counter font
+ *    (moves/score)."
+ *
+ * Every NUMBER in the HUD is now the condensed face — the timer digits, the
+ * pearl count and the crate count — alongside the TIMER / GOALS section
+ * labels. That is the role the manifest gives it outright. Cherry Bomb stays
+ * registered and stays the display face for anything titular that comes later
+ * (end card, CTA); nothing in the bar uses it today.
  */
 const HUD_FONT = 'CherryBomb';
-const HUD_LABEL_FONT = 'AsapBlack';
+const HUD_NUM_FONT = 'AsapBlack';
 /** the reassembly's bar, and ours: everything else scales between them */
 const REF_BAR_W = 622;
 const BAR_W = 681, BAR_X = 360, BAR_TOP = 45;
@@ -1754,7 +1759,7 @@ export class GameScene {
     // registered AND fully loaded before the first Text exists — a Text built
     // a frame early bakes a fallback-font texture and never re-renders itself.
     document.fonts.add(await new FontFace(HUD_FONT, `url("${cherryBombUrl}")`).load());
-    document.fonts.add(await new FontFace(HUD_LABEL_FONT, `url("${asapBlackUrl}")`).load());
+    document.fonts.add(await new FontFace(HUD_NUM_FONT, `url("${asapBlackUrl}")`).load());
 
     const left = BAR_X - BAR_W / 2;
     const bar = new Sprite(panelTexture({
@@ -1780,7 +1785,7 @@ export class GameScene {
       const t = new Text({
         text,
         style: {
-          fontFamily: HUD_LABEL_FONT, fontSize: HUD_LABEL_SIZE, fill: 0xffffff, align: 'center',
+          fontFamily: HUD_NUM_FONT, fontSize: HUD_LABEL_SIZE, fill: 0xffffff, align: 'center',
           letterSpacing: 1.5,
           stroke: { color: 0x000000, width: HUD_LABEL_STROKE, join: 'round' },
           dropShadow: { color: 0x000000, alpha: 0.25, blur: 0, angle: Math.PI / 2, distance: 2 },
@@ -1823,7 +1828,7 @@ export class GameScene {
       const digit = (): Text => {
         const d = new Text({
           text: '0',
-          style: { fontFamily: HUD_FONT, fontSize: 52 * REF_K, fill: TILE_INK, align: 'center' },
+          style: { fontFamily: HUD_NUM_FONT, fontSize: 52 * REF_K, fill: TILE_INK, align: 'center' },
         });
         d.anchor.set(0.5);
         d.position.set(TILE_W / 2, TILE_H / 2);
@@ -1862,7 +1867,7 @@ export class GameScene {
         style: {
           // reference: 20px against its 52 icon, and a 2px outline built from
           // an 8-way text-shadow — both kept in step with the bigger icon
-          fontFamily: HUD_FONT, fontSize: GOAL_ICON * (20 / 52), fill: 0xffffff, align: 'left',
+          fontFamily: HUD_NUM_FONT, fontSize: GOAL_ICON * (20 / 52), fill: 0xffffff, align: 'left',
           stroke: { color: 0x35304a, width: GOAL_ICON * (4 / 52), join: 'round' },
         },
       });
