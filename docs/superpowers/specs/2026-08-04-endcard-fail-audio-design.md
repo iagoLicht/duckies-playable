@@ -148,8 +148,15 @@ grep across `tests/` before writing this document.
 
 ### 3.1 Layout constraint
 
+> **SUPERSEDED 2026-08-04 by the clam-dispenser change (commit `d817ce3`).**
+> The pearl counter now occupies the free left pocket (plate at x 81..227), which
+> is where this section put the CTA chip. The row is full: pearls 81..227, moves
+> 255..465, crates 493..639. Neither the CTA nor the mute toggle has a home any
+> more, and the right pocket (639..720, 81px) fits at most one of them. This
+> needs a layout decision before §3 can be built — see the handover report.
+
 The HUD strip is everything above the tub rim at `y=200`; `HUD_ROW_Y = 112`.
-Measured occupancy of that row today:
+Measured occupancy of that row *before the pearl counter existed*:
 
 - moves plate: `MOVES_X = 360`, 291×116 at scale 0.72 → spans **x 255–465**
 - goal plate: `GOAL_X = 566`, 291×116 at scale 0.50 → spans **x 493–639**
