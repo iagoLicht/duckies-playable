@@ -460,11 +460,14 @@ export class World {
         this.damageBarrel(b, 1);
       }
     }
-    // the official's explodeAt opens cases caught in the blast too. hitClam
-    // refuses an already-open shell, so a chain whose generations overlap the
-    // same clam still spills exactly one pearl per cycle.
-    for (const c of this.clams) {
-      if (Math.hypot(c.x - x, c.y - y) <= SIM.BLAST_R) this.hitClam(c);
-    }
+    // Clams are deliberately NOT in the blast. A blast reaches BLAST_R from the
+    // pop's centre, so opening shells here made a duck exploding NEAR a shell
+    // jolt it open with nothing touching it — the shell moved, opened and paid
+    // out on proximity alone. Measured over real play: 1266 of 2114 pearls came
+    // out that way, from as far as 135px.
+    //
+    // The shell now answers to one thing only: a duck actually reaching it, in
+    // collideDuckClams. Barrels above still take the blast — they are struck
+    // goals, not contact bumpers, and nothing about them was in question.
   }
 }

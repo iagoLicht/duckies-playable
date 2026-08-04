@@ -9,10 +9,10 @@ import type { SimEvent } from '../../src/sim/types';
  * The clam (the pack's oyster rig) is a repeatable PEARL DISPENSER. Rules:
  *   1. it is ALWAYS solid — shut, open or spent it bounces ducks, because the
  *      rig is the game's bumper, and that deflection is level geometry;
- *   2. ANY duck contact with an armed shell, or any blast within BLAST_R,
- *      starts ONE cycle: open -> spill one pearl -> pearl reaches the HUD ->
- *      shell shuts and re-arms. Direction and strength do not gate the payout:
- *      if the shell reacted, it pays;
+ *   2. ANY duck CONTACT with an armed shell starts ONE cycle: open -> spill one
+ *      pearl -> pearl reaches the HUD -> shell shuts and re-arms. Direction and
+ *      strength do not gate the payout: if a duck reached it, it pays. Contact
+ *      is the ONLY trigger - a blast does not reach it, however close;
  *   3. exactly one pearl per cycle, however many things hit it meanwhile;
  *   4. once the level's quota is met the Director spends every clam: still
  *      solid, still visible, permanently inert.
@@ -111,17 +111,23 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(only(w.events, 'pearlReleased')).toHaveLength(1);
   });
 
-  it('a blast inside BLAST_R opens it', () => {
+  it('a blast inside BLAST_R does NOT open it — proximity is not contact', () => {
+    // The shell used to open here, jolting and paying out with nothing touching
+    // it, from as far as BLAST_R away. It is a contact bumper, not a struck
+    // goal: only a duck actually reaching it counts.
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
+    // stood clear of contact so the pop cannot double as a touch
     const d = w.spawnDuck('red', CLAM.x, CLAM.y + SIM.BLAST_R - 5);
+    expect(Math.hypot(d.x - c.x, d.y - c.y)).toBeGreaterThan(SIM.DUCK_R + SIM.CLAM_R);
     w.events.length = 0;
     w.popDuck(d); // pops where it stands and detonates
 
-    expect(c.open).toBe(true);
-    expect(only(w.events, 'clamOpened')).toHaveLength(1);
-    // a blast triggers the same one-frame impact as a duck hit
-    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
+    expect(c.open).toBe(false);
+    expect(only(w.events, 'clamOpened')).toHaveLength(0);
+    expect(only(w.events, 'pearlReleased')).toHaveLength(0);
+    // and nothing moved: no reaction at all, not merely no pearl
+    expect(only(w.events, 'bumperHit')).toHaveLength(0);
   });
 
   it('a blast outside BLAST_R leaves it shut', () => {
@@ -135,17 +141,22 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(only(w.events, 'clamOpened')).toHaveLength(0);
   });
 
-  it('reach is pure centre distance, with no body-radius padding', () => {
-    // exactly on the rim opens (<=), one pixel past does not
-    const on = new World(1);
-    const cOn = on.spawnClam(CLAM.x, CLAM.y);
-    on.popDuck(on.spawnDuck('red', CLAM.x, CLAM.y + SIM.BLAST_R));
-    expect(cOn.open).toBe(true);
-
-    const off = new World(1);
-    const cOff = off.spawnClam(CLAM.x, CLAM.y);
-    off.popDuck(off.spawnDuck('red', CLAM.x, CLAM.y + SIM.BLAST_R + 1));
-    expect(cOff.open).toBe(false);
+  it('no blast distance opens a shell — on the rim, inside it, or halfway in', () => {
+    // This used to assert the blast's reach against a clam: on the rim opened,
+    // a pixel past did not. There is no such reach any more, so the guard now
+    // walks INWARDS from the rim and expects nothing at every step. The nearest
+    // sample is still clear of contact, so any opening here is proximity.
+    for (const gap of [SIM.BLAST_R, SIM.BLAST_R - 1, 120, SIM.DUCK_R + SIM.CLAM_R + 2]) {
+      const w = new World(1);
+      const c = w.spawnClam(CLAM.x, CLAM.y);
+      const d = w.spawnDuck('red', CLAM.x, CLAM.y + gap);
+      expect(Math.hypot(d.x - c.x, d.y - c.y), `gap ${gap}`)
+        .toBeGreaterThan(SIM.DUCK_R + SIM.CLAM_R);
+      w.events.length = 0;
+      w.popDuck(d);
+      expect(c.open, `gap ${gap}`).toBe(false);
+      expect(only(w.events, 'bumperHit'), `gap ${gap}`).toHaveLength(0);
+    }
   });
 
   // ── the cycle ─────────────────────────────────────────────────────────────
