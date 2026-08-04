@@ -29,6 +29,7 @@ import touchBgUrl from '../assets/vfx/aim/aim-touch-bg.webp';
 import touchFrontUrl from '../assets/vfx/aim/aim-touch-front.webp';
 import goalIconUrl from '../assets/icons/goal-Barrel.webp';
 import clamIconUrl from '../assets/icons/goal-Bumper.webp';
+import avatarUrl from '../assets/ui/hud-avatar.webp';
 import cherryBombUrl from '../assets/fonts/cherry-bomb.woff2';
 
 const DUCK_SCALE = 0.9;
@@ -168,22 +169,43 @@ const PUNCH_SCALE = 1.22, PUNCH_TIME = 0.1;
 /** their match burst is the pop burst at 0.7 */
 const MATCH_BURST = 0.7;
 
-// ── motion trail ─────────────────────────────────────────────────────────────
-// The official trails foam behind anything moving (decomp: a `foam` particle
-// every 0.18u of travel, 320ms life, alpha 0.9 -> 0, additive). Deliberately
-// softer here: a third of the opacity, a shorter life so the wake hugs the
-// duck, and speed-scaled alpha so a nudged duck barely whispers while a fresh
-// shot leaves a readable wake. Emission is spaced by TRAVELLED DISTANCE, so it
-// follows launches, bounces, blast shoves and collision knocks alike — and
-// stops by itself the moment the duck does.
-const TRAIL_SPACING = 18;    // px between puffs — close enough to merge into a band
-const TRAIL_MIN_SPEED = 90;  // below this a duck is settling, not moving
-const TRAIL_LIFE = 0.28;     // s — short, so the wake never clutters the lane
-const TRAIL_R0 = 21;         // birth radius, well inside the ~92px duck body
-const TRAIL_SHRINK = 0.4;    // radius share left at death
-const TRAIL_ALPHA_LO = 0.14; // wake strength at drift speed…
-const TRAIL_ALPHA_HI = 0.3;  // …ramping to this at full launch speed
-const TRAIL_MAX_PUFFS = 64; // safety cap — a full-speed wake alone runs ~42
+// ── motion wake ──────────────────────────────────────────────────────────────
+// The OFFICIAL duck wake, verbatim (decomp In.syncWake/makeWake at 90 px/unit):
+// while a duck moves faster than 3 u/s — however it got moving — a soft
+// radial-gradient foam puff is dropped 0.2u BEHIND it (along −velocity), at
+// most one per frame and only after 0.4·radius of travel. Each puff lives
+// 300ms, shrinking to half size and fading 0.9 -> 0 linearly, normal blend,
+// with a whisper of random drift (Phaser's speed 0-10). Distance-gated, so the
+// wake follows launches, bounces, blast shoves and collision knocks alike and
+// stops by itself with the duck; killWake takes the leftovers out with a pop.
+const WAKE_MIN_SPEED = 270;             // 3 u/s
+const WAKE_SPACING = 0.4 * SIM.DUCK_R;  // px of travel between puffs
+const WAKE_BACK = 18;                   // 0.2 u — the puff lands this far behind
+const WAKE_LIFE = 0.3;                  // s
+const WAKE_D0 = 3.8 * SIM.DUCK_R;       // birth diameter: their 64px foam at scale ppu·r·3.8/64
+const WAKE_SHRINK = 0.5;                // scale end = start/2
+const WAKE_ALPHA = 0.9;                 // birth alpha, linear to 0
+const WAKE_DRIFT = 10;                  // px/s max random per-puff drift
+const WAKE_MAX_PUFFS = 64;              // safety cap (the official has none; Phaser pools)
+
+/**
+ * The official's `foam` texture is not an asset — it is GENERATED: a 64px
+ * radial gradient, solid white at the centre, 55% at 45% radius, transparent
+ * at the rim. That soft falloff is what makes the overlapping wake puffs merge
+ * into one band of displaced water instead of reading as discrete dots.
+ */
+function makeFoamTexture(): Texture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.45, 'rgba(255,255,255,0.55)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  return Texture.from(c);
+}
 
 const quadOut = (t: number): number => 1 - (1 - t) * (1 - t);
 
@@ -258,38 +280,64 @@ const AIM_PULL_MAX_T = 0.65;
 // Everything lives in the strip ABOVE the tub (main.ts puts the rim at y=200),
 // so the counters can never sit over the playfield.
 //
-// The bar is the board reassembly's "GAME HUD BAR", rebuilt to its measurements:
-// a dark slate panel carrying MOVES as white digit tiles on the left and a
-// GOALS inset panel on the right holding one icon per goal type with its
-// REMAINING count. Numbers below are the reference's own, in its units; only
-// the bar width changes, because that layout reserves 152px on the left for a
-// player avatar and this game has no avatar to put there.
+// The bar is the board reassembly's "GAME HUD BAR": a dark slate panel with the
+// avatar breaking out of its top-left, MOVES as white digit tiles, and a GOALS
+// inset holding one icon per goal type with its REMAINING count.
+//
+// EVERY number below is measured, from one of two sources:
+//  - the reassembly's own boxes, rendered and read back: bar 622x118, avatar
+//    frame at +10,+10 (128x98), first digit tile at +155,+14 (50x92, gap 5),
+//    goals inset at +276,+10 (323x98).
+//  - the real game's HUD screenshot (642x160) where the reassembly disagrees
+//    with it. The one place it does is the goal icons: measured off the
+//    screenshot they run ~58px in a 96px-tall inset, a ratio of 0.60, where the
+//    reassembly draws them at 52 in 98 (0.53). The game's ratio wins, which is
+//    why GOAL_ICON is a fraction of the inset rather than a fixed 52.
+//
+// The reference bar is then scaled by REF_K to fill our narrower canvas, so the
+// HUD occupies the same share of the screen width it does in the real game
+// (its bar spans 607 of a 642-wide capture, ~95%).
 //
 // This also collapses what used to be three separate plates (pearls | moves |
-// crates) into two groups, which is what frees the row for the CTA and mute
-// chips.
+// crates) into two groups.
 /** the family name we register the woff2 under — the file's own is irrelevant */
 const HUD_FONT = 'CherryBomb';
-/** bar geometry, centred on the 720-wide design canvas */
-const BAR_W = 620, BAR_H = 118, BAR_X = 360, BAR_TOP = 46;
-const BAR_RADIUS = 18;
+/** the reassembly's bar, and ours: everything else scales between them */
+const REF_BAR_W = 622;
+const BAR_W = 681, BAR_X = 360, BAR_TOP = 45;
+const REF_K = BAR_W / REF_BAR_W;
+const BAR_H = 118 * REF_K;
+const BAR_RADIUS = 18 * REF_K;
 /** reference palette */
 const BAR_TOP_COL = '#615c78', BAR_BOT_COL = '#565169';
 const BAR_EDGE = '#3f3a54';
 const INSET_TOP_COL = '#b5aed4', INSET_BOT_COL = '#a49cc4';
 /** digit tile: 50x92, gap 5, and its own palette */
-const TILE_W = 50, TILE_H = 92, TILE_GAP = 5, TILE_RADIUS = 8;
+const TILE_W = 50 * REF_K, TILE_H = 92 * REF_K, TILE_GAP = 5 * REF_K;
+const TILE_RADIUS = 8 * REF_K;
 const TILE_EDGE = '#a9a1c4';
 const TILE_INK = 0x4a4571;
-/** the moves group protrudes this far above the bar's top edge (reference -26) */
-const MOVES_RISE = 26;
-/** goal icons are 52 square in the reference; the count sits at their lower-right */
-const GOAL_ICON = 52, GOAL_GAP = 44;
-// reference: `left:32px; bottom:-2px` against the 52-square icon, so the count
-// hangs off its lower right and drops 2px below it
-const GOAL_COUNT_DX = 32, GOAL_COUNT_DY = 2;
+/** MOVES starts here, past the avatar's reserved slot */
+const MOVES_DX = 155 * REF_K, MOVES_DY = 14 * REF_K;
+/** the goals inset, and the icon row inside it */
+const INSET_DX = 276 * REF_K, INSET_DY = 10 * REF_K, INSET_H = 98 * REF_K;
+/** measured off the real game: icon height is 0.60 of the inset's, not 0.53 */
+const GOAL_ICON = INSET_H * 0.6, GOAL_GAP = 44 * REF_K;
+// reference: `left:32px; bottom:-2px` against its 52-square icon, kept as a
+// fraction of the icon so the bigger icon carries its count with it
+const GOAL_COUNT_DY = 2;
+/** the avatar's frame, and the character breaking out of its top */
+const AVATAR_DX = 10 * REF_K, AVATAR_DY = 10 * REF_K;
+const AVATAR_W = 128 * REF_K, AVATAR_H = 98 * REF_K;
+/**
+ * Character width as a share of the frame. The reassembly says 84%, but the
+ * real game's own HUD says otherwise: measured off the screenshot the character
+ * spans ~118px against a ~128px frame, so it very nearly fills it and spills
+ * past the sides. 0.92 is the game's number and the game wins.
+ */
+const AVATAR_ART_W = AVATAR_W * 0.92;
 /** section labels: 18px, 1.5 letter-spacing, white with a soft drop */
-const HUD_LABEL_SIZE = 20;
+const HUD_LABEL_SIZE = 18 * REF_K;
 /** the counter number punches this big for a beat whenever it changes */
 const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
 
@@ -432,8 +480,10 @@ export class GameScene {
   /** where each duck last dropped a trail puff */
   private trailLast = new Map<number, { x: number; y: number }>();
   /** live puffs, advanced every frame in syncViews; sprites recycle via the pool */
-  private trailPuffs: Array<{ s: Sprite; t: number; a: number }> = [];
+  private trailPuffs: Array<{ s: Sprite; t: number; id: number; dx: number; dy: number }> = [];
   private trailPool: Sprite[] = [];
+  /** the official's generated radial-gradient `foam` (see makeFoamTexture) */
+  private foamTex!: Texture;
   /** sim ducks awaiting their staggered spawn view (official drainSpawnQueue) */
   private spawnQueue: Duck[] = [];
   /** seconds until the next queued spawn view may appear */
@@ -514,6 +564,7 @@ export class GameScene {
     this.crescent.addChild(cb, cf);
     this.crescent.visible = false;
     this.aimUnder.addChild(this.aimLine, this.crescent);
+    this.foamTex = makeFoamTexture();
     this.app.stage.addChild(this.aimUnder, this.trailLayer, this.layer, this.fx, this.hud);
     await this.buildHud();
 
@@ -883,7 +934,7 @@ export class GameScene {
           // leave it pointing at a dead id
           if (this.targetedDuck === e.id) this.targetedDuck = null;
           this.turning.delete(e.id);
-          this.trailLast.delete(e.id);
+          this.killWake(e.id);
           this.popDuck(v);
         }
         this.flashOn.delete(e.id);
@@ -1533,13 +1584,14 @@ export class GameScene {
   /**
    * The board reassembly's GAME HUD BAR, rebuilt to its own measurements.
    *
-   * Geometry is lifted straight off the reference rather than eyeballed: the
-   * reassembly's boxes were rendered and read back as bar 622x118, first digit
-   * tile at +155,+14 (50x92, gap 5), goals inset at +276,+10 (323x98). Those
-   * offsets are reproduced below against our own bar width — the one number
-   * that had to change, because the reference reserves 152px on its left for a
-   * player avatar and this game has none. Dropping that reserve is why the bar
-   * is 560 rather than 622; everything inside keeps the reference's sizes.
+   * Geometry is measured, not eyeballed — see the HUD constants for where each
+   * number comes from and where the real game overrides the reassembly.
+   *
+   * The avatar is the reassembly's own character art, staged as hud-avatar.webp
+   * and drawn at its authored 84% of the frame width, bottom-aligned so it
+   * breaks out of the frame's top the way it does in the game. Its frame is a
+   * panel in the goals-inset style; the pack's avatar-frame.png is a blue ring
+   * for a round portrait and does not match this HUD, so it is not used.
    *
    * GOALS holds one icon per goal type with its REMAINING count at the icon's
    * lower right, which is the reference's own reading — not the done/total the
@@ -1573,8 +1625,7 @@ export class GameScene {
     this.hud.addChild(bar);
 
     // content box, per the reference's 3px border + 20px side padding
-    const inLeft = left + 23;
-    const inRight = left + BAR_W - 23;
+    const inRight = left + BAR_W - 23 * REF_K;
 
     const label = (text: string, cx: number): Text => {
       const t = new Text({
@@ -1586,8 +1637,11 @@ export class GameScene {
         },
       });
       t.anchor.set(0.5);
-      // both labels straddle the bar's top edge in the reference
-      t.position.set(cx, BAR_TOP - 2);
+      // Both labels straddle the bar's top edge, sitting mostly above it. The
+      // reference puts their centre 2px above; Cherry Bomb carries more space
+      // under its baseline than the reference's face, so this leans a little
+      // further up to land the same way against the edge.
+      t.position.set(cx, BAR_TOP - 7);
       return t;
     };
 
@@ -1600,17 +1654,18 @@ export class GameScene {
       drop: { y: 2, colour: 'rgba(47,41,72,.4)' },
     });
     const tilesW = TILE_W * 2 + TILE_GAP;
-    const tileY = BAR_TOP + 14;
+    const tilesX = left + MOVES_DX;
+    const tileY = BAR_TOP + MOVES_DY;
     this.movesDigits = [];
     for (let i = 0; i < 2; i++) {
-      const x = inLeft + i * (TILE_W + TILE_GAP);
+      const x = tilesX + i * (TILE_W + TILE_GAP);
       const tile = new Sprite(tileTex);
       tile.width = TILE_W;
       tile.height = TILE_H + 2;
       tile.position.set(x, tileY);
       const d = new Text({
         text: '0',
-        style: { fontFamily: HUD_FONT, fontSize: 52, fill: TILE_INK, align: 'center' },
+        style: { fontFamily: HUD_FONT, fontSize: 52 * REF_K, fill: TILE_INK, align: 'center' },
       });
       d.anchor.set(0.5);
       d.position.set(x + TILE_W / 2, tileY + TILE_H / 2);
@@ -1619,43 +1674,89 @@ export class GameScene {
     }
 
     // ── GOALS: the inset panel, filling the rest of the bar (CSS `flex:1`) ──
-    const insetX = inLeft + tilesW + 16;
+    const insetX = left + INSET_DX;
     const insetW = inRight - insetX;
-    const insetY = BAR_TOP + 10;
+    const insetY = BAR_TOP + INSET_DY;
     const inset = new Sprite(panelTexture({
-      w: insetW, h: 98, r: 14,
+      w: insetW, h: INSET_H, r: 14 * REF_K,
       fill: [[0, INSET_TOP_COL], [1, INSET_BOT_COL]],
       edge: { colour: BAR_EDGE, width: 3 },
     }));
     inset.width = insetW;
-    inset.height = 98;
+    inset.height = INSET_H;
     inset.position.set(insetX, insetY);
     this.goalsCentre = insetX + insetW / 2;
-    this.goalsIconY = insetY + (98 - GOAL_ICON) / 2;
+    this.goalsIconY = insetY + (INSET_H - GOAL_ICON) / 2;
 
     const count = (): Text => {
       const t = new Text({
         text: '',
         style: {
-          // reference: 20px, and a 2px outline built from an 8-way text-shadow
-          fontFamily: HUD_FONT, fontSize: 20, fill: 0xffffff, align: 'left',
-          stroke: { color: 0x35304a, width: 4, join: 'round' },
+          // reference: 20px against its 52 icon, and a 2px outline built from
+          // an 8-way text-shadow — both kept in step with the bigger icon
+          fontFamily: HUD_FONT, fontSize: GOAL_ICON * (20 / 52), fill: 0xffffff, align: 'left',
+          stroke: { color: 0x35304a, width: GOAL_ICON * (4 / 52), join: 'round' },
         },
       });
       t.anchor.set(0, 1); // the reference pins the count by its bottom-left
       return t;
     };
 
-    const clamIcon = new Sprite(await loadTexture(clamIconUrl));
-    clamIcon.width = clamIcon.height = GOAL_ICON;
+    // Both icons are staged TRIMMED, so their textures are pure art with no
+    // transparent margin. Sizing by height and taking width from the texture's
+    // own aspect therefore makes the two read at the same visual size while
+    // each keeps its proportions — the barrel is taller than it is wide, the
+    // shell nearly square, and neither is stretched to a square box.
+    const goalIcon = async (url: string): Promise<Sprite> => {
+      const tex = await loadTexture(url);
+      const s = new Sprite(tex);
+      s.height = GOAL_ICON;
+      s.width = GOAL_ICON * (tex.width / tex.height);
+      return s;
+    };
+
+    const clamIcon = await goalIcon(clamIconUrl);
     this.pearlText = count();
     this.pearlGroup.addChild(clamIcon, this.pearlText);
     this.clamIcon = clamIcon;
 
-    const crateIcon = new Sprite(await loadTexture(goalIconUrl));
-    crateIcon.width = crateIcon.height = GOAL_ICON;
+    const crateIcon = await goalIcon(goalIconUrl);
     this.crateIcon = crateIcon;
     this.goalText = count();
+
+    // ── the avatar, breaking out of the bar's top-left ──
+    const frameX = left + AVATAR_DX, frameY = BAR_TOP + AVATAR_DY;
+    const frame = new Sprite(panelTexture({
+      w: AVATAR_W, h: AVATAR_H, r: 14 * REF_K,
+      fill: [[0, INSET_TOP_COL], [1, INSET_BOT_COL]],
+      edge: { colour: BAR_EDGE, width: 3 },
+    }));
+    frame.width = AVATAR_W;
+    frame.height = AVATAR_H;
+    frame.position.set(frameX, frameY);
+
+    const avatarTex = await loadTexture(avatarUrl);
+    const avatar = new Sprite(avatarTex);
+    avatar.width = AVATAR_ART_W;
+    // its own aspect, so the character is never squashed
+    avatar.height = AVATAR_ART_W * (avatarTex.height / avatarTex.width);
+    // bottom-centred on the frame: the overflow all goes upward, out of the bar
+    avatar.position.set(
+      frameX + (AVATAR_W - avatar.width) / 2,
+      frameY + AVATAR_H - avatar.height,
+    );
+    // The frame's bottom edge, redrawn OVER the character so it reads as
+    // standing IN the frame rather than in front of it. Only the bottom edge
+    // and its two corners — stroking a whole rect here would draw a bar across
+    // the character's chest.
+    const r = 14 * REF_K;
+    const bx = frameX + 1.5, by = frameY + AVATAR_H - 1.5, bw = AVATAR_W - 3;
+    const lip = new Graphics()
+      .moveTo(bx, by - r)
+      .arcTo(bx, by, bx + r, by, r)
+      .lineTo(bx + bw - r, by)
+      .arcTo(bx + bw, by, bx + bw, by - r, r)
+      .stroke({ color: BAR_EDGE, width: 3, alignment: 0.5 });
 
     // z-order: the bar is already down; the inset sits on it, the icons and
     // counts on the inset, and the labels last so they read over the top edge
@@ -1663,7 +1764,8 @@ export class GameScene {
       inset,
       crateIcon, this.goalText,
       this.pearlGroup,
-      label('MOVES', inLeft + tilesW / 2),
+      frame, avatar, lip,
+      label('MOVES', tilesX + tilesW / 2),
       label('GOALS', insetX + insetW / 2),
     );
     this.layoutGoals();
@@ -1678,18 +1780,21 @@ export class GameScene {
   private layoutGoals(): void {
     const showClam = this.director.level.pearls > 0;
     this.pearlGroup.visible = showClam;
-    const span = showClam ? GOAL_ICON * 2 + GOAL_GAP : GOAL_ICON;
+    // widths differ per icon now that each keeps its own aspect, so the row is
+    // measured rather than assumed
+    const cw = this.clamIcon.width, bw = this.crateIcon.width;
+    const span = showClam ? cw + GOAL_GAP + bw : bw;
     let x = this.goalsCentre - span / 2;
     const y = this.goalsIconY;
     if (showClam) {
       this.clamIcon.position.set(x, y);
-      this.pearlText.position.set(x + GOAL_COUNT_DX, y + GOAL_ICON + GOAL_COUNT_DY);
+      this.pearlText.position.set(x + cw * (32 / 52), y + GOAL_ICON + GOAL_COUNT_DY);
       // where a spilled pearl flies to — its own icon, so it lands on the count
-      this.pearlTarget = { x: x + GOAL_ICON / 2, y: y + GOAL_ICON / 2 };
-      x += GOAL_ICON + GOAL_GAP;
+      this.pearlTarget = { x: x + cw / 2, y: y + GOAL_ICON / 2 };
+      x += cw + GOAL_GAP;
     }
     this.crateIcon.position.set(x, y);
-    this.goalText.position.set(x + GOAL_COUNT_DX, y + GOAL_ICON + GOAL_COUNT_DY);
+    this.goalText.position.set(x + bw * (32 / 52), y + GOAL_ICON + GOAL_COUNT_DY);
   }
 
   /** MOVES is two tiles, so the number is set a digit at a time. */
@@ -1792,71 +1897,77 @@ export class GameScene {
   }
 
   /**
-   * Drop a foam puff every TRAIL_SPACING px of a moving duck's travel. A fast
-   * duck covers several spacings per render frame, so the emission walks the
-   * whole segment — otherwise a full-speed shot would leave a dashed gap trail.
-   * Distance-driven, so it needs no per-cause wiring: launches, wall bounces,
-   * blast shoves and collision knocks all move the duck, and a still duck (or
-   * the hitstop freeze) emits nothing, which is what makes the trail vanish on
-   * its own once the duck stops.
+   * The official In.syncWake, line for line: speed² gate at 3 u/s, distance
+   * gate at 0.4·radius since the last drop, then ONE puff 0.2u behind the duck
+   * along its velocity. No per-cause wiring needed — anything that moves the
+   * body (launch, bounce, blast shove, collision knock) feeds the wake, and a
+   * still duck (or the hitstop freeze) emits nothing, so the wake dies with
+   * the motion.
    */
   private syncTrail(d: Duck): void {
+    const speed2 = d.vx * d.vx + d.vy * d.vy;
+    if (speed2 < WAKE_MIN_SPEED * WAKE_MIN_SPEED) return;
     const last = this.trailLast.get(d.id);
-    if (!last) {
-      // first sight (spawn or level swap): anchor without emitting, so a view
-      // appearing far from a stale anchor can never paint a streak across the tub
-      this.trailLast.set(d.id, { x: d.x, y: d.y });
-      return;
-    }
-    const speed = Math.hypot(d.vx, d.vy);
-    if (speed < TRAIL_MIN_SPEED) {
+    if (last) {
+      const ddx = d.x - last.x;
+      const ddy = d.y - last.y;
+      if (ddx * ddx + ddy * ddy < WAKE_SPACING * WAKE_SPACING) return;
       last.x = d.x;
       last.y = d.y;
-      return;
+    } else {
+      // official lastWakeX starts NaN: the first moving frame always emits
+      this.trailLast.set(d.id, { x: d.x, y: d.y });
     }
-    let dx = d.x - last.x;
-    let dy = d.y - last.y;
-    let dist = Math.hypot(dx, dy);
-    while (dist >= TRAIL_SPACING) {
-      last.x += (dx / dist) * TRAIL_SPACING;
-      last.y += (dy / dist) * TRAIL_SPACING;
-      this.emitTrailPuff(last.x, last.y, speed);
-      dx = d.x - last.x;
-      dy = d.y - last.y;
-      dist = Math.hypot(dx, dy);
-    }
+    const inv = 1 / Math.sqrt(speed2);
+    this.emitWakePuff(d.id, d.x - d.vx * inv * WAKE_BACK, d.y - d.vy * inv * WAKE_BACK);
   }
 
-  private emitTrailPuff(x: number, y: number, speed: number): void {
-    if (this.trailPuffs.length >= TRAIL_MAX_PUFFS) return; // stay uncluttered
+  private emitWakePuff(id: number, x: number, y: number): void {
+    if (this.trailPuffs.length >= WAKE_MAX_PUFFS) return;
     let s = this.trailPool.pop();
     if (!s) {
-      s = new Sprite(this.blobTex);
+      s = new Sprite(this.foamTex);
       s.anchor.set(0.5);
-      s.blendMode = 'add'; // additive white on the blue water = soft foam
     }
     s.position.set(x, y);
-    s.width = s.height = TRAIL_R0 * 2;
-    const k = Math.min(1, speed / SIM.LAUNCH_SPEED);
-    const a = TRAIL_ALPHA_LO + (TRAIL_ALPHA_HI - TRAIL_ALPHA_LO) * k;
-    s.alpha = a;
+    s.width = s.height = WAKE_D0;
+    s.alpha = WAKE_ALPHA;
+    // Phaser's speed {min:0, max:10}: a random heading at a random dawdle
+    const ang = Math.random() * Math.PI * 2;
+    const drift = Math.random() * WAKE_DRIFT;
     this.trailLayer.addChild(s);
-    this.trailPuffs.push({ s, t: 0, a });
+    this.trailPuffs.push({ s, t: 0, id, dx: Math.cos(ang) * drift, dy: Math.sin(ang) * drift });
   }
 
-  /** Age every live puff: shrink and fade out smoothly, then recycle. */
+  /** Age every live puff — the official particle curve: linear shrink to half,
+   *  linear fade to nothing, drifting all the while — then recycle. */
   private advanceTrail(dt: number): void {
     for (let i = this.trailPuffs.length - 1; i >= 0; i--) {
       const p = this.trailPuffs[i]!;
       p.t += dt;
-      const q = Math.min(1, p.t / TRAIL_LIFE);
-      p.s.width = p.s.height = TRAIL_R0 * 2 * (1 - (1 - TRAIL_SHRINK) * q);
-      p.s.alpha = p.a * (1 - quadOut(q));
+      const q = Math.min(1, p.t / WAKE_LIFE);
+      p.s.x += p.dx * dt;
+      p.s.y += p.dy * dt;
+      p.s.width = p.s.height = WAKE_D0 * (1 - (1 - WAKE_SHRINK) * q);
+      p.s.alpha = WAKE_ALPHA * (1 - q);
       if (q >= 1) {
         this.trailLayer.removeChild(p.s);
         this.trailPool.push(p.s);
         this.trailPuffs.splice(i, 1);
       }
+    }
+  }
+
+  /** The official killWake: a popped duck's emitter dies with it, taking its
+   *  still-fading puffs along — the wake must never outlive the duck. */
+  private killWake(id: number): void {
+    this.trailLast.delete(id);
+    for (let i = this.trailPuffs.length - 1; i >= 0; i--) {
+      const p = this.trailPuffs[i]!;
+      if (p.id !== id) continue;
+      this.trailLayer.removeChild(p.s);
+      this.trailPool.push(p.s);
+      this.trailPuffs.splice(i, 1);
     }
   }
 

@@ -8,6 +8,13 @@ import subsetFont from 'subset-font';
 
 const PACK = process.env.DUCKIES_PACK
   ?? 'C:/Users/licht/OneDrive/Desktop/Candivore/Marketing AI Student_Ready/duckies-playable-home-test 3/assets';
+/**
+ * The board HUD reassembly, which ships its own art alongside the spec — the
+ * top-left avatar character in particular, which is not in the pack. Entries
+ * that come from here carry `root: BOARD`.
+ */
+const BOARD = process.env.DUCKIES_BOARD
+  ?? 'C:/Users/licht/OneDrive/Desktop/Candivore/UI component reassembly- Board';
 const OUT = 'src/assets';
 
 /** Copied byte-for-byte (skeletons, atlases, audio). */
@@ -39,11 +46,19 @@ const WEBP = [
   { src: 'entities/oyster/oyster.orig.png', out: 'entities/oyster/oyster.webp', q: 82 },
   { src: 'entities/oyster/pearl.png', q: 88 },                      // manifest: "52x52 glossy pearl … the droppable pearl it spills"
   { src: 'theme/in-game-bg.png', q: 60 },                           // full-screen bg, flat art survives low q
-  { src: 'icons/goal-Barrel.png', q: 75 },
+  // TRIMMED: both goal icons ship with a lot of transparent margin, and
+  // different amounts of it (the shell fills 88% of its 256 square, the barrel
+  // only 73x82%). Drawn at one nominal size the barrel therefore reads much
+  // smaller than the shell. Trimming to the art means the HUD can size them by
+  // what is actually visible, each keeping its own proportions.
+  { src: 'icons/goal-Barrel.png', q: 75, trim: true },
   // the pink shell with a pearl in it — the HUD's clam-goal icon. The board
   // reassembly assigns it exactly that role, alongside goal-Barrel.
-  { src: 'icons/goal-Bumper.png', q: 75 },
+  { src: 'icons/goal-Bumper.png', q: 75, trim: true },
   { src: 'icons/goal-DuckAll.png', q: 75 },
+  // the HUD bar's top-left character, already trimmed to its own bounds
+  // (739x892). Not in the pack — it ships with the board reassembly.
+  { src: 'TTeddy-trimmed.png', out: 'ui/hud-avatar.webp', q: 82, root: BOARD, width: 320 },
   { src: 'ui/btn-play-hero.png', q: 75 },
   { src: 'ui/hud-currency-plate.png', q: 75 },
   { src: 'ui/popup-body-tall.png', q: 75 },
@@ -162,13 +177,18 @@ for (const rel of COPY) {
   console.log(`copy  ${rel.padEnd(58)} ${kb(size)}`);
 }
 
-for (const { src: rel, out: outRel, q } of WEBP) {
-  const src = path.join(PACK, rel);
+for (const { src: rel, out: outRel, q, root, width, trim } of WEBP) {
+  const src = path.join(root ?? PACK, rel);
   // `out` only when the staged name differs from the source (see the clam)
   const out = path.join(OUT, outRel ?? rel.replace(/\.png$/, '.webp'));
   ensureDir(out);
   const inSize = fs.statSync(src).size;
-  await sharp(src).webp({ quality: q }).toFile(out);
+  // `width` only for art that ships far larger than it is ever drawn, and
+  // `trim` only for standalone sprites. Atlas pages must never get either —
+  // their UVs are pixel addresses into an exact page size.
+  let pipe = sharp(src);
+  if (trim) pipe = pipe.trim({ threshold: 5 });
+  await pipe.resize(width ?? null).webp({ quality: q }).toFile(out);
   const outSize = fs.statSync(out).size;
   totalIn += inSize;
   totalOut += outSize;
