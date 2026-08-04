@@ -369,40 +369,14 @@ const HUD_LABEL_STROKE = 4;
 /** the counter number punches this big for a beat whenever it changes */
 const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
 
-// ── the countdown strip, hung under the bar ──────────────────────────────────
-//
-// The real game has something in this slot: the only HUD capture I have shows a
-// green segmented strip at the bottom-left, sitting over the tub's rim. It is
-// cut off after four rows, so what is borrowed from it is exactly what those
-// four rows prove — the palette, and the fact that it overlaps the rim rather
-// than clearing it. Nothing else about it is knowable from that capture, so the
-// geometry is ours, built from the HUD's own material.
-//
-// There is no clear wall to hang it on: the bar ends at y≈178 (including its
-// drop) and the tub's rim band starts at 185, so anything here must overlap one
-// or the other. It overlaps the rim, which is what the game does.
-const TIMER_W = 470, TIMER_H = 38;
-const TIMER_TOP = 180;
-const TIMER_RADIUS = TIMER_H / 2;
-/** the track is inset inside the shell by this on every side */
-const TIMER_PAD = 4;
 /**
- * Sampled off the game's strip: its green runs #48b258 at the top edge into
- * #86df5a four rows down. The capture ends there, so the darker foot of the
- * gradient is inferred rather than measured — flagged because it is the one
- * colour here that is not read off a pixel.
- */
-const TIMER_FILL_TOP = '#8cdf5c', TIMER_FILL_BOT = '#4a9f38';
-/** its track, both sampled: #2f2a3f in shadow, #5d5378 where lit */
-const TIMER_TRACK_TOP = '#2f2a3f', TIMER_TRACK_BOT = '#4a4460';
-/** the clock medallion, sitting on the strip's left cap so it overhangs both edges */
-const CLOCK_R = 30;
-/** its bezel — the HUD's own edge colour, which is what outlines every other plate */
-const CLOCK_RIM = BAR_EDGE;
-/**
- * How long a level's clock starts at. DISPLAY ONLY — the bar drains and the
- * hand sweeps, but reaching zero does nothing: the fail path it would trigger
- * is still unbuilt (see the endcard spec).
+ * The countdown lives in the bar's left slot, in the two digit tiles that used
+ * to carry MOVES — seconds fit those tiles exactly, since both are a two-digit
+ * zero-padded number and the clock never passes 99.
+ *
+ * DISPLAY ONLY: the digits count down, but reaching zero does nothing. The
+ * level is still decided by the move budget, which the sim enforces and the
+ * HUD no longer shows. See the endcard spec for the fail path this wants.
  */
 const LEVEL_SECONDS = 60;
 
@@ -569,8 +543,8 @@ export class GameScene {
   private aimClock = 0;
   /** pointerId that owns the current grab — other pointers are ignored */
   private activePointer: number | null = null;
-  /** HUD readouts, built in init and driven purely by sim events */
-  private movesDigits: Text[] = [];
+  /** the bar's two digit tiles — the countdown's seconds */
+  private clockDigits: Text[] = [];
   private goalText!: Text;
   private pearlText!: Text;
   private clamIcon!: Sprite;
@@ -584,14 +558,8 @@ export class GameScene {
   private pearlTarget = { x: BAR_X, y: BAR_TOP + 60 };
   /** in-flight pearls by clam id; `pearlCollected` lands the matching one */
   private pearlFlights = new Map<number, () => void>();
-  /** the countdown strip: seconds left, and the parts that show them */
+  /** seconds left on the countdown */
   private timerLeft = LEVEL_SECONDS;
-  private timerMask = new Graphics();
-  /** last mask width drawn, so the mask is only rebuilt when it actually moves */
-  private timerMaskW = -1;
-  private timerTrack = { x: 0, y: 0, w: 0, h: 0 };
-  private clockHand = new Graphics();
-  private timerText!: Text;
   /** the sound layer. Built once and NEVER rebuilt, so a mute survives a level
    *  swap and the decoded buffers are paid for exactly once per session. */
   readonly audio = new Audio();
@@ -1166,7 +1134,9 @@ export class GameScene {
         console.log(`level ${e.index + 1}: ${e.name} — ${e.moves} moves`);
         break;
       case 'movesLeft':
-        this.setMoves(e.left);
+        // The move budget still binds — the sim refuses a grab once it is spent
+        // — but the bar's digit tiles now carry the clock, so nothing in the HUD
+        // shows it. Left as a case so the event stays explicitly handled.
         break;
       case 'counter':
         // crates REMAINING, to read the same way as the pearl count beside it
@@ -1794,7 +1764,7 @@ export class GameScene {
       return t;
     };
 
-    // ── MOVES: two digit tiles, zero-padded, exactly as the reference pads ──
+    // ── TIMER: two digit tiles, zero-padded, exactly as the reference pads ──
     const tileTex = panelTexture({
       w: TILE_W, h: TILE_H, r: TILE_RADIUS,
       fill: [[0, '#ffffff'], [0.52, '#ffffff'], [0.72, '#f2effc'], [1, '#d8d2ec']],
@@ -1805,7 +1775,7 @@ export class GameScene {
     const tilesW = TILE_W * 2 + TILE_GAP;
     const tilesX = left + MOVES_DX;
     const tileY = BAR_TOP + MOVES_DY;
-    this.movesDigits = [];
+    this.clockDigits = [];
     for (let i = 0; i < 2; i++) {
       const x = tilesX + i * (TILE_W + TILE_GAP);
       const tile = new Sprite(tileTex);
@@ -1818,7 +1788,7 @@ export class GameScene {
       });
       d.anchor.set(0.5);
       d.position.set(x + TILE_W / 2, tileY + TILE_H / 2);
-      this.movesDigits.push(d);
+      this.clockDigits.push(d);
       this.hud.addChild(tile, d);
     }
 
@@ -1914,113 +1884,26 @@ export class GameScene {
       crateIcon, this.goalText,
       this.pearlGroup,
       frame, avatar, lip,
-      label('MOVES', tilesX + tilesW / 2),
+      label('TIMER', tilesX + tilesW / 2),
       label('GOALS', insetX + insetW / 2),
     );
-    this.buildTimer();
+    this.setTimer(LEVEL_SECONDS);
     this.layoutGoals();
   }
 
   /**
-   * The countdown strip under the bar: a drain fill in a dark track, with a
-   * clock medallion on its left cap.
-   *
-   * The fill is MASKED rather than resized. Scaling a rounded-cap sprite down
-   * to a tenth of its width squashes those caps into slivers; masking keeps the
-   * left cap round and gives the draining edge a clean square cut, which is how
-   * a drain bar is supposed to read anyway.
+   * Point the countdown at a remaining time, a digit per tile. Also the reset
+   * path. Unlike the goal counts these are set WITHOUT the punch: they change
+   * every second, and a 1.3x pulse once a second reads as a nervous tic rather
+   * than as feedback.
    */
-  private buildTimer(): void {
-    const tx = BAR_X - TIMER_W / 2, ty = TIMER_TOP;
-    const shell = new Sprite(panelTexture({
-      w: TIMER_W, h: TIMER_H, r: TIMER_RADIUS,
-      fill: [[0, BAR_TOP_COL], [1, BAR_BOT_COL]],
-      edge: { colour: BAR_EDGE, width: 3 },
-      drop: { y: 3, colour: 'rgba(40,35,70,.35)' },
-    }));
-    shell.width = TIMER_W;
-    shell.height = TIMER_H + 3;
-    shell.position.set(tx, ty);
-
-    // The clock sits on the left cap, so the TRACK has to start clear of it —
-    // otherwise the last few seconds of green drain in behind the medallion and
-    // the bar reads as empty while time is still on the clock.
-    const clockCx = tx + CLOCK_R - 8;
-    const t = {
-      x: clockCx + CLOCK_R + 6, y: ty + TIMER_PAD,
-      h: TIMER_H - TIMER_PAD * 2,
-      w: 0,
-    };
-    t.w = tx + TIMER_W - TIMER_PAD - t.x;
-    this.timerTrack = t;
-    const track = new Sprite(panelTexture({
-      w: t.w, h: t.h, r: t.h / 2,
-      fill: [[0, TIMER_TRACK_TOP], [1, TIMER_TRACK_BOT]],
-    }));
-    track.width = t.w;
-    track.height = t.h;
-    track.position.set(t.x, t.y);
-
-    const fill = new Sprite(panelTexture({
-      w: t.w, h: t.h, r: t.h / 2,
-      fill: [[0, TIMER_FILL_TOP], [0.55, TIMER_FILL_TOP], [1, TIMER_FILL_BOT]],
-      insets: [{ y: 3, colour: 'rgba(255,255,255,.3)' }],
-    }));
-    fill.width = t.w;
-    fill.height = t.h;
-    fill.position.set(t.x, t.y);
-    fill.mask = this.timerMask;
-
-    this.timerText = new Text({
-      text: '',
-      style: {
-        fontFamily: HUD_FONT, fontSize: 22, fill: 0xffffff, align: 'center',
-        stroke: { color: 0x000000, width: HUD_LABEL_STROKE, join: 'round' },
-      },
-    });
-    this.timerText.anchor.set(0.5);
-    this.timerText.position.set(t.x + t.w / 2, t.y + t.h / 2 + 1);
-
-    // ── the clock, straddling the strip's left cap ──
-    const clock = new Container();
-    clock.position.set(clockCx, ty + TIMER_H / 2);
-    const face = new Graphics()
-      .circle(0, 2, CLOCK_R).fill({ color: 0x282235, alpha: 0.35 })
-      .circle(0, 0, CLOCK_R).fill(CLOCK_RIM)
-      .circle(0, 0, CLOCK_R - 6).fill(0xf4f0ff);
-    // quarter ticks, so it reads as a dial and not a plain disc
-    for (let i = 0; i < 4; i++) {
-      const a = (i * Math.PI) / 2;
-      const r0 = CLOCK_R - 12, r1 = CLOCK_R - 8;
-      face.moveTo(Math.sin(a) * r0, -Math.cos(a) * r0)
-        .lineTo(Math.sin(a) * r1, -Math.cos(a) * r1)
-        .stroke({ color: TILE_INK, width: 2.5, cap: 'round' });
-    }
-    this.clockHand = new Graphics()
-      .moveTo(0, 3)
-      .lineTo(0, -(CLOCK_R - 11))
-      .stroke({ color: TILE_INK, width: 3.5, cap: 'round' });
-    const pip = new Graphics().circle(0, 0, 2.6).fill(TILE_INK);
-    clock.addChild(face, this.clockHand, pip);
-
-    this.hud.addChild(shell, track, fill, this.timerMask, this.timerText, clock);
-    this.setTimer(LEVEL_SECONDS);
-  }
-
-  /** Point the whole strip at a remaining time. Also the reset path. */
   private setTimer(seconds: number): void {
     this.timerLeft = Math.max(0, seconds);
-    const frac = this.timerLeft / LEVEL_SECONDS;
-    const t = this.timerTrack;
-    const w = Math.round(t.w * frac);
-    if (w !== this.timerMaskW) {
-      this.timerMaskW = w;
-      this.timerMask.clear().rect(t.x, t.y, w, t.h).fill(0xffffff);
+    // ceil, so the clock only shows 00 once time is actually gone
+    const s = String(Math.ceil(this.timerLeft)).padStart(2, '0').slice(-2);
+    for (const [i, d] of this.clockDigits.entries()) {
+      if (d.text !== s[i]) d.text = s[i]!;
     }
-    // one full sweep over the level, so the hand is visibly moving the whole time
-    this.clockHand.rotation = (1 - frac) * Math.PI * 2;
-    const s = Math.ceil(this.timerLeft);
-    this.timerText.text = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
   /**
@@ -2049,13 +1932,7 @@ export class GameScene {
     this.goalText.position.set(x + bw * (32 / 52), y + GOAL_ICON + GOAL_COUNT_DY);
   }
 
-  /** MOVES is two tiles, so the number is set a digit at a time. */
-  private setMoves(left: number): void {
-    const s = String(Math.max(0, left)).padStart(2, '0').slice(-2);
-    for (const [i, d] of this.movesDigits.entries()) this.setCounter(d, s[i]!);
-  }
-
-  /** Set a counter and punch it, so a spent move or a cleared goal is felt. */
+  /** Set a counter and punch it, so a cleared goal is felt. */
   private setCounter(t: Text, value: string): void {
     if (t.text === value) return;
     t.text = value;
