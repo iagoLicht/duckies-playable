@@ -73,12 +73,13 @@ const T_RIPPLE = 3;
  * applying its final frame, and this one keys `master` + the `head*` bones —
  * held, it would outrank and freeze idle, jump, dance and the aim recoil.
  *
- * (The rig's `turn` anim — the official's frozen facing track — is deliberately
- * NOT used. Measured on this rig it rotates 50 bones, but for our plain colour
- * skins the visible ones are only the ring's: a duck at 0° and at 180° renders
- * identically, since `turn` mostly drives costume accessories no skin here
- * wears. Always-on it would also outrank head/body, killing the idle bob, the
- * match jump, dance, and the ring spin — all cost, no picture.)
+ * (An earlier note here claimed the rig's `turn` anim is invisible on plain
+ * colour skins — that a duck at 0° and at 180° renders identically. It does
+ * not: rendered against the real combined skin, t=3 shows the back of the head
+ * with no eyes and no beak. `turn` is a genuine facing turntable and drives the
+ * held duck's aim facing, see TURNTABLE_BONE and setTurn. It is a per-pull
+ * track swap, not an always-on one, so the idle bob, match jump, dance and ring
+ * spin all still have track 0 whenever nobody is aiming.)
  */
 const T_SPAWN = 22;
 // official spawn stagger: one duck view per 55ms, each entering with a
@@ -188,6 +189,24 @@ const CRESCENT_SCALE = 0.55; // 60px-tall pill -> ~33px
  * = small round ring, long pull = long teardrop + recoiled duck).
  */
 const AIM_BONE = 'a_target';
+/**
+ * `turn`'s turntable driver, and the one bone that makes the facing and the
+ * sling fight each other: the chain is `a_target < all < master < body`, so
+ * `all` sits BETWEEN the aim root and the duck. Rotating the sling toward the
+ * shot rotates `all` with it (that is what carries the recoil round), but
+ * `turn` ALSO rotates `all`, 0 -> 360 over its 12s — and that rotation lands on
+ * the aim frame, swinging the teardrop away from the shot and throwing the
+ * recoil off by the facing angle. Measured: pull down with `turn` pinned at
+ * t=3 and the teardrop points left instead of up.
+ *
+ * So the facing's rotation is stripped off this bone every frame, in the same
+ * beforeUpdateWorldTransforms hook that steers AIM_BONE. Nothing is lost: the
+ * duck's actual facing comes from `turn`'s attachment, deform, RGBA and
+ * head/body timelines, not from `all`. And nothing else is disturbed — `turn`
+ * is the only animation in the rig that rotates `all` (checked against all 34),
+ * and its setup rotation is 0.
+ */
+const TURNTABLE_BONE = 'all';
 /** drag distance (px) that maps to the aim anim's full stretch */
 const AIM_PULL_FULL = 260;
 /** even the shortest valid pull shows some stretch (reference: s044 small oval) */
@@ -881,11 +900,15 @@ export class GameScene {
     // steer the aim teardrop after the animation is applied, before the world
     // transforms bake — the supported spine hook for per-frame bone overrides
     const bone = s.skeleton.findBone(AIM_BONE);
-    if (bone) {
+    const spin = s.skeleton.findBone(TURNTABLE_BONE);
+    if (bone || spin) {
       const id = d.id;
       s.beforeUpdateWorldTransforms = () => {
+        // `turn` is the ONLY animation in the rig that rotates `all`, and its
+        // setup value is 0, so putting it back costs nothing anywhere else.
+        if (spin) spin.rotation = 0;
         const rot = this.aimBoneRot.get(id);
-        if (rot !== undefined) bone.rotation = rot;
+        if (rot !== undefined && bone) bone.rotation = rot;
       };
     }
     this.layer.addChild(s);
