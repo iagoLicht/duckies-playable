@@ -81,6 +81,14 @@ export const FIELD = { x0: 46, y0: 220, x1: 674, y1: 1234, bumperY: 950 } as con
  * Length targets for the board itself: bot p50 <= 9 shots and p90 <= 16. A board
  * that runs longer is a grind, and a grind is not tension.
  *
+ * DUCK POPULATION: every board keeps 4 or 5 ducks afloat, and starts with 4. The
+ * cap is a readability rule, not a physics one — a playable ad has seconds to
+ * make its verb legible, and a crowded tub reads as noise where five ducks read
+ * as a puzzle. Two boards moved to hold the band (Twin Pearls 3 -> 4, The Golden
+ * Pearl 6 -> 5); both cost a shot and both are documented at their definitions.
+ * If a future board wants a sixth duck, the honest fix is to make its geometry
+ * carry the difficulty instead.
+ *
  * RESOLVED (2026-08-04, the clam-fling pass): the dispenser cycle had briefly
  * pushed levels 4, 7 and 10 to p90 17. Giving the clams a real bumper fling
  * (CLAM_KICK/CLAM_KEEP, replacing the barrels' half-energy reflection) more than
@@ -285,12 +293,19 @@ export const LEVELS: LevelDef[] = [
   // but leaves almost nothing for the barrels — that is the near-miss. (Pearls
   // are the real difficulty currency: a clam needs a direct fast hit or a blast
   // centred within 135, where a barrel just needs to be bumped.)
+  //
+  // DUCK COUNT: targetDucks 3 -> 4, bringing the campaign's only sub-4 board up
+  // into the 4-5 band. It costs a shot. The corridor is 128px of free water and
+  // a fourth duck is one more thing loitering in front of it, so the pair you
+  // want takes longer to line up: measured p75 8 -> 9, blasts 3.1 -> 4.6 (more
+  // popping, not more progress), p50 and p90 unmoved at 5 and 12. Budget follows
+  // the p75 to 9.
   {
     name: 'Twin Pearls',
-    moves: 8,
+    moves: 9,
     pearls: 4,
     assist: 0.45,
-    targetDucks: 3,
+    targetDucks: 4,
     ducks: [
       { colour: 'green', x: 200, y: 420 },
       { colour: 'yellow', x: 520, y: 420 },
@@ -502,7 +517,7 @@ export const LEVELS: LevelDef[] = [
   //    the maze that still has work left. This was worth more than every hp
   //    change put together.
   //  - targetDucks 6 (was 5) for the same reason: more ducks, more legal lines
-  //    through 36px lanes.
+  //    through 36px lanes. SUPERSEDED — see DUCK COUNT below.
   // The clam triangle is untouched — it IS the level — and so is the golden
   // barrel's burial spot. Every crate is now hp1, the golden included: with
   // finaleArmed at assist 0.9 the closing shot lands, and one hit ends the ad on
@@ -517,7 +532,18 @@ export const LEVELS: LevelDef[] = [
   // Clam activations did not change (6.8 either way) — the shots to get them
   // halved. p50 fell 8 -> 4.
   //
-  // FLAGGED, not settled: this makes the finale the SHORTEST board in the
+  // DUCK COUNT: targetDucks 6 -> 5, to hold the campaign-wide 4-5 band. This is
+  // the board that least wants it — six was chosen precisely because three clams
+  // cut the tub into 36px lanes and a bigger population guarantees a legal
+  // duck-to-duck line — so it was measured carefully. It survives: p50 unmoved
+  // at 4, p75 5 -> 6, p90 7 -> 8, still far inside the p90 <= 16 ceiling, and
+  // 150/150 seeds clear with the budget disabled. Budget follows the p75 to 6.
+  // The cost is in the TAIL, exactly where the old note predicted: worst run
+  // 12 -> 19 shots. Fewer ducks in narrow lanes means the occasional run spends
+  // a long time with no line worth taking. Nothing deadlocks (the softlock guard
+  // covers that), but the unlucky run is now noticeably unluckier.
+  //
+  // FLAGGED, not settled: even at 6 this is among the shortest boards in the
   // campaign, after an 8-shot Gauntlet, which is odd pacing for a climax. It is
   // also the level where the tuning bot's random spray benefits most from the
   // fling, so its shot count may flatter a bot over a human who aims one clam at
@@ -525,12 +551,10 @@ export const LEVELS: LevelDef[] = [
   // too easy the honest fix is a harder board, not a tighter budget.
   {
     name: 'The Golden Pearl',
-    moves: 5,
+    moves: 6,
     pearls: 6,
     assist: 0.4,
-    // 6: the three clams cut the tub into narrow lanes, so the board wants a
-    // healthy duck population to guarantee a legal duck-to-duck line at all times
-    targetDucks: 6,
+    targetDucks: 5,
     ducks: [
       { colour: 'green', x: 200, y: 360 },
       { colour: 'green', x: 520, y: 360 },
