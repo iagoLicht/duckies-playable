@@ -68,6 +68,16 @@ const T_SPIN = 2;
 /** looping water ripple under every duck, always on (official: track 2) */
 const T_RIPPLE = 3;
 /**
+ * The rig's `glow` on the duck the aim is resting on. It gets its own track
+ * because it must layer OVER whatever the body is doing: measured, `glow` is
+ * four timelines and they drive nothing but the `head-glow`/`body-glow` slots
+ * (attachment on, then an alpha pulse 0.48 -> 0.69 -> 0.48 over its 1s loop),
+ * so it collides with nothing else on the skeleton.
+ */
+const T_GLOW = 4;
+/** how long the glow takes to fade once the aim leaves the duck */
+const GLOW_FADE = 0.12;
+/**
  * One-shot spawn_enter as a duck's view appears (official: track 22). It MUST
  * be mixed back out when it finishes: a completed non-looping track keeps
  * applying its final frame, and this one keys `master` + the `head*` bones —
@@ -288,6 +298,8 @@ export class GameScene {
   private ringMode = new Map<number, 'ring' | 'aim'>();
   /** aim-teardrop rotation (deg, rig space) applied per duck before world transforms */
   private aimBoneRot = new Map<number, number>();
+  /** the duck the aim is resting on, when it is a same-colour (i.e. matching) one */
+  private targetedDuck: number | null = null;
   /** ducks posed by the rig's `turn` (facing the shot) instead of idling */
   private turning = new Set<number>();
   /** pooled trajectory-dot sprites (official aim-dot), laid out each frame */
@@ -512,8 +524,10 @@ export class GameScene {
     );
     if (busy) return;
     const held = this.director.slingshot.pull?.duck.id;
+    // the duck being aimed at is busy answering the aim — a dance on top of the
+    // `targeted` hop would read as noise, and would outrank it on the body track
     const ids = [...this.duckViews.keys()].filter(
-      (id) => id !== held && !this.spawning.has(id),
+      (id) => id !== held && id !== this.targetedDuck && !this.spawning.has(id),
     );
     if (ids.length === 0) return;
     const v = this.duckViews.get(ids[(Math.random() * ids.length) | 0]!)!;
@@ -596,6 +610,56 @@ export class GameScene {
         }
       }
     }
+
+    // The aim resting on a duck of the HELD duck's colour is the one preview
+    // that promises a pop, so the target says so itself. Same gate as the red
+    // contact crescent (a 'duck' hit is the only legal shot), narrowed to a
+    // colour match — a different colour is a legal shot but not a match, and
+    // marking it would be a lie.
+    let mark: number | null = null;
+    if (held !== null && pv?.hitKind === 'duck' && pv.hitId !== null) {
+      const shooter = this.director.slingshot.pull?.duck;
+      const struck = this.director.world.ducks.find((k) => k.id === pv.hitId);
+      // a struck duck already spoken for (matched, or mid-pop) is not a target
+      if (shooter && struck && struck.colour === shooter.colour && !struck.popping && !struck.matched) {
+        mark = struck.id;
+      }
+    }
+    this.setTargeted(mark);
+  }
+
+  /**
+   * Mark the duck the aim is promising to pop: the rig's own `targeted` react —
+   * a 33px hop with a squash-and-settle and the happy eyes, measured off the
+   * .skel — plus its `glow` pulse held for as long as the aim stays there.
+   *
+   * The hop fires ONCE per acquisition rather than looping. It is a reaction:
+   * the duck notices you, then sits there glowing. Looping it would have the
+   * target bouncing every 0.53s for as long as you hold the drag, which reads
+   * as an idle animation rather than an answer to the aim.
+   *
+   * `targeted` is one-shot with `idle` queued behind it, so the body restores
+   * itself and clearing only has to deal with the glow. That also means letting
+   * go mid-hop lets the hop finish instead of snapping back.
+   *
+   * (`jump` is the other candidate and is deliberately not used here: measured,
+   * it lifts 73px against this one's 33 — and it is already the match reaction,
+   * so reusing it would make "about to match" and "matched" the same picture.)
+   */
+  private setTargeted(id: number | null): void {
+    if (this.targetedDuck === id) return;
+    const prev = this.targetedDuck === null ? null : this.duckViews.get(this.targetedDuck);
+    if (prev) prev.state.setEmptyAnimation(T_GLOW, GLOW_FADE);
+    this.targetedDuck = id;
+    if (id === null) return;
+    const v = this.duckViews.get(id);
+    if (!v) {
+      this.targetedDuck = null;
+      return;
+    }
+    v.state.setAnimation(T_BODY, 'targeted', false);
+    v.state.addAnimation(T_BODY, 'idle', true, 0);
+    v.state.setAnimation(T_GLOW, 'glow', true);
   }
 
   /**
@@ -687,6 +751,9 @@ export class GameScene {
           this.duckViews.delete(e.id);
           this.ringMode.delete(e.id);
           this.aimBoneRot.delete(e.id);
+          // its view is about to be destroyed, so drop the mark rather than
+          // leave it pointing at a dead id
+          if (this.targetedDuck === e.id) this.targetedDuck = null;
           this.turning.delete(e.id);
           this.popDuck(v);
         }
@@ -832,6 +899,7 @@ export class GameScene {
     this.pearlFlights.clear();
     this.ringMode.clear();
     this.aimBoneRot.clear();
+    this.targetedDuck = null;
     this.turning.clear();
     this.flashOn.clear();
     this.flashSlots.clear();
