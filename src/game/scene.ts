@@ -24,6 +24,7 @@ import handAtlasText from '../assets/entities/tutorial-hand/tutorial-hand.atlas?
 import handPageUrl from '../assets/entities/tutorial-hand/tutorial-hand.webp';
 import starUrl from '../assets/vfx/impact-star.webp';
 import blobUrl from '../assets/vfx/explode-particle.webp';
+import trailUrl from '../assets/vfx/trail-noise-short.webp';
 import aimDotUrl from '../assets/vfx/aim/aim-dot.webp';
 import touchBgUrl from '../assets/vfx/aim/aim-touch-bg.webp';
 import touchFrontUrl from '../assets/vfx/aim/aim-touch-front.webp';
@@ -182,30 +183,31 @@ const WAKE_MIN_SPEED = 270;             // 3 u/s
 const WAKE_SPACING = 0.4 * SIM.DUCK_R;  // px of travel between puffs
 const WAKE_BACK = 18;                   // 0.2 u — the puff lands this far behind
 const WAKE_LIFE = 0.3;                  // s
-const WAKE_D0 = 3.8 * SIM.DUCK_R;       // birth diameter: their 64px foam at scale ppu·r·3.8/64
+const WAKE_D0 = 3.8 * SIM.DUCK_R;       // birth length: their 64px foam at scale ppu·r·3.8/64
 const WAKE_SHRINK = 0.5;                // scale end = start/2
-const WAKE_ALPHA = 0.9;                 // birth alpha, linear to 0
 const WAKE_DRIFT = 10;                  // px/s max random per-puff drift
 const WAKE_MAX_PUFFS = 64;              // safety cap (the official has none; Phaser pools)
-
 /**
- * The official's `foam` texture is not an asset — it is GENERATED: a 64px
- * radial gradient, solid white at the centre, 55% at 45% radius, transparent
- * at the rim. That soft falloff is what makes the overlapping wake puffs merge
- * into one band of displaced water instead of reading as discrete dots.
+ * The pack's own trail texture, per its manifest entry: "Tileable noisy streak
+ * for motion trails behind launched ducks. Sells speed in the shooter loop."
+ * (priority: core.) It replaces the generated round foam puff.
+ *
+ * It is a 191x77 greyscale streak WITH an alpha falloff — grey noise 0..255,
+ * alpha mostly opaque with soft ends — so it is composited ADDITIVELY: drawn
+ * normally its dark half would smear grey over the water, where additively the
+ * dark half contributes nothing and only the bright streaks register. That is
+ * what the texture is authored for.
+ *
+ * Being a streak rather than a disc, it is laid ALONG the duck's heading and
+ * keeps its own 191:77 aspect instead of being forced square.
  */
-function makeFoamTexture(): Texture {
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const g = c.getContext('2d')!;
-  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grad.addColorStop(0, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.45, 'rgba(255,255,255,0.55)');
-  grad.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 64, 64);
-  return Texture.from(c);
-}
+const WAKE_ASPECT = 77 / 191;
+/**
+ * Birth alpha, then linear to 0. Deliberately low: this is a wake, not an
+ * effect you should notice — at 0.9 (the round puff's value) an additive noise
+ * streak reads as a bright smear that competes with the ducks.
+ */
+const WAKE_ALPHA = 0.22;
 
 const quadOut = (t: number): number => 1 - (1 - t) * (1 - t);
 
@@ -482,8 +484,8 @@ export class GameScene {
   /** live puffs, advanced every frame in syncViews; sprites recycle via the pool */
   private trailPuffs: Array<{ s: Sprite; t: number; id: number; dx: number; dy: number }> = [];
   private trailPool: Sprite[] = [];
-  /** the official's generated radial-gradient `foam` (see makeFoamTexture) */
-  private foamTex!: Texture;
+  /** the pack's noisy motion-trail streak (see WAKE_ASPECT) */
+  private trailTex!: Texture;
   /** sim ducks awaiting their staggered spawn view (official drainSpawnQueue) */
   private spawnQueue: Duck[] = [];
   /** seconds until the next queued spawn view may appear */
@@ -564,7 +566,7 @@ export class GameScene {
     this.crescent.addChild(cb, cf);
     this.crescent.visible = false;
     this.aimUnder.addChild(this.aimLine, this.crescent);
-    this.foamTex = makeFoamTexture();
+    this.trailTex = await loadTexture(trailUrl);
     this.app.stage.addChild(this.aimUnder, this.trailLayer, this.layer, this.fx, this.hud);
     await this.buildHud();
 
@@ -1919,18 +1921,27 @@ export class GameScene {
       this.trailLast.set(d.id, { x: d.x, y: d.y });
     }
     const inv = 1 / Math.sqrt(speed2);
-    this.emitWakePuff(d.id, d.x - d.vx * inv * WAKE_BACK, d.y - d.vy * inv * WAKE_BACK);
+    this.emitWakePuff(
+      d.id, d.x - d.vx * inv * WAKE_BACK, d.y - d.vy * inv * WAKE_BACK,
+      Math.atan2(d.vy, d.vx),
+    );
   }
 
-  private emitWakePuff(id: number, x: number, y: number): void {
+  private emitWakePuff(id: number, x: number, y: number, heading: number): void {
     if (this.trailPuffs.length >= WAKE_MAX_PUFFS) return;
     let s = this.trailPool.pop();
     if (!s) {
-      s = new Sprite(this.foamTex);
+      s = new Sprite(this.trailTex);
       s.anchor.set(0.5);
+      // the streak is authored dark-on-transparent; only additively does its
+      // bright noise register and its dark half stay out of the water
+      s.blendMode = 'add';
     }
     s.position.set(x, y);
-    s.width = s.height = WAKE_D0;
+    // laid along the direction of travel, keeping the texture's own aspect
+    s.rotation = heading;
+    s.width = WAKE_D0;
+    s.height = WAKE_D0 * WAKE_ASPECT;
     s.alpha = WAKE_ALPHA;
     // Phaser's speed {min:0, max:10}: a random heading at a random dawdle
     const ang = Math.random() * Math.PI * 2;
@@ -1948,7 +1959,9 @@ export class GameScene {
       const q = Math.min(1, p.t / WAKE_LIFE);
       p.s.x += p.dx * dt;
       p.s.y += p.dy * dt;
-      p.s.width = p.s.height = WAKE_D0 * (1 - (1 - WAKE_SHRINK) * q);
+      const len = WAKE_D0 * (1 - (1 - WAKE_SHRINK) * q);
+      p.s.width = len;
+      p.s.height = len * WAKE_ASPECT;
       p.s.alpha = WAKE_ALPHA * (1 - q);
       if (q >= 1) {
         this.trailLayer.removeChild(p.s);
