@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
+import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
 // static (not dynamic) on purpose: spine-pixi-v8 registers its render pipe as a
 // pixi extension at module load, which must happen BEFORE app.init() collects
 // pipes — a dynamic import after init leaves renderPipes['spine'] undefined in
@@ -11,20 +11,6 @@ import tipSideUrl from './assets/entities/wall-bouncers/BouncyWall-small-tip-sid
 
 export const DESIGN_W = 720;
 export const DESIGN_H = 1280;
-
-/**
- * The whole game — tub, water, entities, HUD — is drawn at design size into one
- * container and then shrunk by this, so nothing inside it knows or cares. Every
- * coordinate in the sim and the scene stays in design space.
- *
- * The point is the 256px of empty wall this opens ABOVE the HUD, which a
- * countdown clock will occupy. So the freed height all goes to the top (the
- * content keeps its footing on the bottom edge) while the freed width splits
- * evenly, keeping the tub centred exactly as before.
- */
-export const VIEW_SCALE = 0.8;
-export const VIEW_X = (DESIGN_W * (1 - VIEW_SCALE)) / 2;
-export const VIEW_Y = DESIGN_H * (1 - VIEW_SCALE);
 
 function fitCanvas(app: Application): void {
   const scale = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H);
@@ -55,11 +41,6 @@ async function boot(): Promise<void> {
   // in-game-bg tiled full-screen, so no cropped bathroom props (plant, sink,
   // slippers, towel) appear outside the tub. tileScale matches the cover-fit
   // scale the full bg previously rendered at (1280/1050)
-  //
-  // The wall is the one thing NOT inside `world`: it has to keep covering the
-  // whole canvas or the margin the shrink opens up would be flat backgroundColor
-  // instead of tile. Its pitch is scaled by hand instead, so the mosaic reads
-  // the same size against the tub as it always did.
   const bgImg = new Image();
   bgImg.src = wallTileUrl;
   await bgImg.decode();
@@ -68,14 +49,8 @@ async function boot(): Promise<void> {
     width: DESIGN_W,
     height: DESIGN_H,
   });
-  bg.tileScale.set((1280 / 1050) * VIEW_SCALE);
+  bg.tileScale.set(1280 / 1050);
   app.stage.addChild(bg);
-
-  // everything from here down is laid out in design space and shrunk as a unit
-  const world = new Container();
-  world.scale.set(VIEW_SCALE);
-  world.position.set(VIEW_X, VIEW_Y);
-  app.stage.addChild(world);
 
   // ── bathtub ──────────────────────────────────────────────────────────────
   // The real game's tub silhouette: straight top edge set between "shoulder"
@@ -119,7 +94,7 @@ async function boot(): Promise<void> {
   water.tileScale.set(1.3); // tile pitch ≈ the example's 1.35 world units at our ppu
   const waterMask = traceTub(new Graphics(), 10).fill(0xffffff);
   water.mask = waterMask;
-  world.addChild(water, waterMask);
+  app.stage.addChild(water, waterMask);
 
   // white ring hugging the inside wall — same hand-drawn sticker style as the
   // white base under every entity: NOT a perfect stroke. The boundary is sampled
@@ -233,7 +208,7 @@ async function boot(): Promise<void> {
   const triRight = new Sprite(tipTex);
   triRight.anchor.set(125 / 164, 0.5);
   triRight.position.set(DESIGN_W - (tub.l + 24), 950);
-  world.addChild(ringShadow, triLeft, triRight, ringWhite);
+  app.stage.addChild(ringShadow, triLeft, triRight, ringWhite);
 
   // rim band: navy outline sandwich, near-white band, cool shadow along the
   // inner edge — colours matched to the gameplay reference
@@ -241,7 +216,7 @@ async function boot(): Promise<void> {
   traceTub(tubFrame, 0).stroke({ width: 30, color: 0x1a2430 });
   traceTub(tubFrame, 0).stroke({ width: 24, color: 0xa9c6cc });
   traceTub(tubFrame, -2).stroke({ width: 17, color: 0xe4eef1 });
-  world.addChild(tubFrame);
+  app.stage.addChild(tubFrame);
 
   // ── the live game: sim-driven entities, input, fx ────────────────────────
   // ?level=N (1-based) jumps straight to a level — for playtesting and for the
@@ -253,7 +228,7 @@ async function boot(): Promise<void> {
     const wanted = Number(new URLSearchParams(location.search).get('level'));
     if (Number.isFinite(wanted) && wanted >= 1) startLevel = Math.floor(wanted) - 1;
   }
-  const scene = new GameScene(app, world, 20260802, startLevel);
+  const scene = new GameScene(app, 20260802, startLevel);
   await scene.init();
 
   // deterministic readiness signal for the screenshot harness
