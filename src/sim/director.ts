@@ -9,9 +9,14 @@ import { World } from './world';
  * Runs one level of the campaign: builds the board, counts the shot budget down,
  * tops the duck supply back up, and decides cleared vs failed.
  *
- * Cleared = every barrel destroyed and every clam cracked open.
+ * Cleared = every barrel destroyed and the level's pearl quota collected.
  * Failed  = the budget is spent, goals remain, and the board has come to rest
  *           (so a shot still in flight always gets to finish its chain first).
+ *
+ * Clams are dispensers, not goals: the goal is the PEARL COUNT, and one clam
+ * services it as many times as the level asks. The HUD therefore carries two
+ * counters — crates destroyed, and pearls remaining — and a pearl is only
+ * counted when it reaches the HUD (`pearlCollected`), never when it is spilled.
  */
 /** settled ticks before the board is examined for having no legal shot at all */
 const DEAD_BOARD_GRACE = 30;
@@ -28,6 +33,8 @@ export class Director {
   finaleArmed = false;
   movesLeft: number;
   private destroyed = 0;
+  /** pearls that have REACHED the HUD — spilled-but-still-flying ones don't count */
+  private pearlsCollected = 0;
   private respawnAt: number | null = null;
   /** consecutive settled ticks — the dead-board check only runs after a pause */
   private deadBoardTicks = 0;
@@ -60,11 +67,22 @@ export class Director {
       this.movesLeft - this.pendingLaunches <= 0 || this.won || this.failed;
   }
 
-  /** goals: barrels to break plus clams to crack */
+  /** crates destroyed — the barrel-icon counter */
   get counter(): { done: number; total: number } {
-    const total = this.level.barrels.length + this.level.clams.length;
-    const opened = this.world.clams.filter((c) => c.open).length;
-    return { done: this.destroyed + opened, total };
+    return { done: this.destroyed, total: this.level.barrels.length };
+  }
+
+  /** pearls REMAINING out of the level's quota — the pearl-icon counter */
+  get pearlCounter(): { left: number; total: number } {
+    return {
+      left: Math.max(0, this.level.pearls - this.pearlsCollected),
+      total: this.level.pearls,
+    };
+  }
+
+  /** every outstanding goal, of either kind — what the finale flourish counts */
+  get goalsRemaining(): number {
+    return this.world.barrels.length + this.pearlCounter.left;
   }
 
   start(): void {
@@ -81,6 +99,7 @@ export class Director {
       type: 'levelStarted', index: this.levelIndex, name: this.level.name, moves: this.movesLeft,
     });
     this.pushCounter();
+    this.pushPearlCounter();
     this.pushLocal({ type: 'movesLeft', left: this.movesLeft });
   }
 
@@ -100,10 +119,23 @@ export class Director {
         this.destroyed++;
         this.pushCounter();
       }
-      if (e.type === 'clamOpened') this.pushCounter();
+      // a pearl counts when it LANDS on the counter, not when the shell spills
+      // it — so the number the player sees drop is the pearl they just watched
+      // arrive, and the level cannot clear while one is still in the air
+      if (e.type === 'pearlCollected') {
+        this.pearlsCollected++;
+        this.pushPearlCounter();
+      }
     }
 
-    const goalsLeft = this.world.barrels.length > 0 || this.world.clams.some((c) => !c.open);
+    // quota met: every clam retires to an inert (but solid and visible) bumper.
+    // The event lands in world.events and drains on the next step, one tick
+    // behind — harmless, and it keeps the drain loop free of world mutation.
+    if (this.pearlCounter.left === 0 && this.world.clams.some((c) => c.active)) {
+      this.world.spendClams();
+    }
+
+    const goalsLeft = this.goalsRemaining > 0;
     if (!this.won && !this.failed && !goalsLeft) {
       this.won = true;
       this.pushLocal({ type: 'levelCleared', index: this.levelIndex, movesLeft: this.movesLeft });
@@ -118,7 +150,7 @@ export class Director {
     }
 
     // finale flourish: the last goal standing gets near-max assist
-    if (!this.finaleArmed && !this.won && this.counter.total - this.counter.done === 1) {
+    if (!this.finaleArmed && !this.won && this.goalsRemaining === 1) {
       this.finaleArmed = true;
       this.slingshot.assist = Math.max(this.level.assist, 0.9);
       this.pushLocal({ type: 'finaleArmed' });
@@ -129,8 +161,17 @@ export class Director {
     this.handleRespawns();
   }
 
-  /** nothing moving, no fuse burning, no pending pop */
+  /**
+   * Nothing moving, no fuse burning, no pending pop — and no clam mid-cycle.
+   *
+   * An open clam is unfinished business exactly like a burning fuse: it has a
+   * pearl in the air that has not been counted yet. Without this an unlucky
+   * last shot could crack a clam, let the board come to rest, and be declared
+   * FAILED a full second before the pearl it already earned lands on the
+   * counter and would have cleared the level.
+   */
   boardSettled(): boolean {
+    if (this.world.clams.some((c) => c.open)) return false;
     return !this.world.ducks.some((d) => d.live || d.matched || d.vx !== 0 || d.vy !== 0);
   }
 
@@ -227,6 +268,11 @@ export class Director {
   private pushCounter(): void {
     const c = this.counter;
     this.pushLocal({ type: 'counter', done: c.done, total: c.total });
+  }
+
+  private pushPearlCounter(): void {
+    const p = this.pearlCounter;
+    this.pushLocal({ type: 'pearlCounter', left: p.left, total: p.total });
   }
 
   private pushLocal(e: SimEvent): void {

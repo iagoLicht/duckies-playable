@@ -54,9 +54,13 @@ frame and is otherwise a pure function of sim state.
   regardless of colour, and each doomed duck explodes **once it has come fully
   to rest** — so chains walk across the board with a deliberate rhythm rather
   than going off all at once.
-- **Clams** are solid bumpers that crack open on a fast direct hit *or* any
-  blast reaching them, spilling a pearl. Opening one is a goal.
-- **Levels.** Cleared when every crate is destroyed and every clam is open;
+- **Clams** are solid bumpers *and* repeatable pearl dispensers. A fast direct
+  hit or any blast reaching one opens the shell, which spills exactly one pearl;
+  the pearl flies up to the HUD, drops the pearl counter by one, and the shell
+  shuts and re-arms. The goal is the **pearl quota**, not the clam — so a single
+  clam can serve a quota of any size. Once the quota is met every clam goes
+  inert: still solid, still visible, but it no longer opens.
+- **Levels.** Cleared when every crate is destroyed and the pearl quota is met;
   failed when the move budget is spent, goals remain, and the board is at rest
   (so a shot in flight always finishes its chain first). Clear → next level;
   fail → retry the same board.
@@ -100,7 +104,12 @@ Several manifest-tagged "core" VFX textures are staged but not yet used (see
   freezes every lower track that shares a bone.
 - **The oyster's `bump` re-attaches the lid for most of its run** and only strips
   it at the very end — time anything "the clam is open now" off react + bump
-  (~0.57 s), not off the react beat.
+  (~0.57 s), not off the react beat. That total is `SIM.CLAM_SPILL_TICKS`; the
+  sim owns the clam's whole timeline and the view animates off it, so the pearl
+  cannot drift out of sync with the shell.
+- **The rig has no authored "close".** Shutting reuses `bump-inactive` — the shut
+  attachment set plus an `oyster` squash — played out of `idle`, then rests on
+  `inactive`, which is exactly where a freshly spawned clam starts.
 - **Stage `oyster.orig.png`, not `oyster.png`.** The pack's `oyster.png` is a 2×
   upscale while the atlas declares `size:296,272`, which fails the page-size
   assertion.

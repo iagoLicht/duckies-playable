@@ -25,10 +25,26 @@ const only = (evs: SimEvent[], type: SimEvent['type']): SimEvent[] =>
   evs.filter((e) => e.type === type);
 const has = (evs: SimEvent[], type: SimEvent['type']): boolean => only(evs, type).length > 0;
 
-/** clear every goal on the board in one go, without moving anything */
+/**
+ * Clear every goal on the board without moving anything. Barrels go in one hit;
+ * pearls cannot — a clam dispenses one per cycle, so the quota has to be run out
+ * cycle by cycle. The guard is a runaway stop, not a real bound: a board whose
+ * quota needs more than 100 cycles is an authoring bug and should fail loudly.
+ */
+const collectPearlsDownTo = (d: Director, leave: number): void => {
+  let guard = 0;
+  while (d.pearlCounter.left > leave && guard++ < 100) {
+    // trigger only as many clams as we still need, so we cannot overshoot and
+    // leave the board in a state the test did not ask for
+    const need = d.pearlCounter.left - leave;
+    for (const c of d.world.clams.slice(0, need)) d.world.hitClam(c);
+    for (let i = 0; i < SIM.CLAM_CYCLE_TICKS; i++) d.step(SIM.DT);
+  }
+};
+
 const razeAllGoals = (d: Director): void => {
   for (const b of [...d.world.barrels]) d.world.damageBarrel(b, 99);
-  for (const c of d.world.clams) d.world.openClam(c);
+  collectPearlsDownTo(d, 0);
 };
 
 describe('LEVELS authoring', () => {
@@ -144,7 +160,9 @@ describe('Director construction', () => {
 
 for (let index = 0; index < LEVELS.length; index++) {
   const level = LEVELS[index]!;
-  const goals = level.barrels.length + level.clams.length;
+  // clams are no longer goals — the crate counter is barrels only, and pearls
+  // are counted separately by their own quota
+  const goals = level.barrels.length;
 
   describe(`Director — level ${index} "${level.name}"`, () => {
     it('start() builds the authored board and announces the level', () => {
@@ -159,6 +177,8 @@ for (let index = 0; index < LEVELS.length; index++) {
       expect(d.movesLeft).toBe(level.moves);
       expect(d.slingshot.assist).toBeCloseTo(level.assist);
       expect(d.counter).toEqual({ done: 0, total: goals });
+      expect(d.pearlCounter).toEqual({ left: level.pearls, total: level.pearls });
+      expect(d.world.clams.every((c) => c.active)).toBe(true);
       expect(d.won).toBe(false);
       expect(d.failed).toBe(false);
       expect(d.finaleArmed).toBe(false);
@@ -173,6 +193,9 @@ for (let index = 0; index < LEVELS.length; index++) {
         { type: 'levelStarted', index, name: level.name, moves: level.moves },
       ]);
       expect(only(evs, 'counter')).toEqual([{ type: 'counter', done: 0, total: goals }]);
+      expect(only(evs, 'pearlCounter')).toEqual([
+        { type: 'pearlCounter', left: level.pearls, total: level.pearls },
+      ]);
       expect(only(evs, 'movesLeft')).toEqual([{ type: 'movesLeft', left: level.moves }]);
       d.step(SIM.DT);
       expect(drain(d).filter((e) => e.type.endsWith('Spawned'))).toHaveLength(0);
@@ -219,7 +242,7 @@ for (let index = 0; index < LEVELS.length; index++) {
       expect(d.world.ducks.some((k) => k.live)).toBe(false);
     });
 
-    it('clearing every barrel and cracking every clam wins the level', () => {
+    it('clearing every barrel and collecting every pearl wins the level', () => {
       const d = started(index);
       drain(d);
       razeAllGoals(d);
@@ -228,6 +251,7 @@ for (let index = 0; index < LEVELS.length; index++) {
       expect(d.won).toBe(true);
       expect(d.failed).toBe(false);
       expect(d.counter).toEqual({ done: goals, total: goals });
+      expect(d.pearlCounter.left).toBe(0);
       const evs = drain(d);
       expect(only(evs, 'levelCleared')).toEqual([
         { type: 'levelCleared', index, movesLeft: level.moves },
@@ -239,19 +263,42 @@ for (let index = 0; index < LEVELS.length; index++) {
       expect(only(drain(d), 'levelCleared')).toHaveLength(0);
     });
 
-    it('an open clam counts toward the goal counter, a shut one does not', () => {
+    it('a pearl decrements the quota only when it REACHES the counter', () => {
       if (level.clams.length === 0) return; // nothing to assert on this board
       const d = started(index);
       drain(d);
-      const before = d.counter.done;
-      d.world.openClam(d.world.clams[0]!);
+      const before = d.pearlCounter.left;
+      d.world.hitClam(d.world.clams[0]!);
+
+      // spilled but still in flight: the number has not moved
+      for (let i = 0; i < SIM.CLAM_SPILL_TICKS + SIM.PEARL_FLIGHT_TICKS - 1; i++) d.step(SIM.DT);
+      expect(d.pearlCounter.left).toBe(before);
+
       d.step(SIM.DT);
-      expect(d.counter.done).toBe(before + 1);
-      expect(has(drain(d), 'counter')).toBe(true);
-      // opening it again is inert
-      d.world.openClam(d.world.clams[0]!);
-      d.step(SIM.DT);
-      expect(d.counter.done).toBe(before + 1);
+      expect(d.pearlCounter.left).toBe(before - 1);
+      expect(has(drain(d), 'pearlCounter')).toBe(true);
+      // the crate counter is untouched by pearls
+      expect(d.counter.total).toBe(level.barrels.length);
+    });
+
+    it('the clams go inert the moment the pearl quota is met, and stay visible', () => {
+      if (level.clams.length === 0) return;
+      const d = started(index);
+      drain(d);
+      razeAllGoals(d);
+      run(d, 1);
+
+      expect(d.pearlCounter.left).toBe(0);
+      expect(d.world.clams).toHaveLength(level.clams.length); // still on the board
+      expect(d.world.clams.every((c) => !c.active)).toBe(true);
+
+      // and a further hit yields nothing at all
+      drain(d);
+      for (const c of d.world.clams) d.world.hitClam(c);
+      run(d, SIM.CLAM_CYCLE_TICKS);
+      const evs = drain(d);
+      expect(only(evs, 'clamOpened')).toHaveLength(0);
+      expect(only(evs, 'pearlCollected')).toHaveLength(0);
     });
 
     it('the budget only bites once the board has come to rest', () => {
@@ -279,11 +326,32 @@ for (let index = 0; index < LEVELS.length; index++) {
 
     it('a settled board with the budget spent but no goals left wins, not fails', () => {
       const d = started(index);
-      d.movesLeft = 0;
+      // clear the goals FIRST, then spend the budget: razing pearls takes real
+      // ticks now, and a board with the budget already at zero and pearls still
+      // outstanding is a legitimate failure, which is not what this asserts
       razeAllGoals(d);
+      d.movesLeft = 0;
       run(d, 2);
       expect(d.won).toBe(true);
       expect(d.failed).toBe(false);
+    });
+
+    it('the last move cracking a clam is never failed out from under the pearl', () => {
+      if (level.clams.length === 0) return;
+      const d = started(index);
+      drain(d);
+      // spend the budget down to nothing and open a clam: the board goes
+      // completely still while the pearl is mid-flight
+      d.movesLeft = 0;
+      d.world.hitClam(d.world.clams[0]!);
+      // ticks, not seconds — run() takes seconds, and the whole point of this
+      // test is the exact window between the crack and the pearl landing
+      for (let i = 0; i < SIM.CLAM_SPILL_TICKS + SIM.PEARL_FLIGHT_TICKS; i++) d.step(SIM.DT);
+
+      expect(d.failed).toBe(false);
+      expect(has(drain(d), 'levelFailed')).toBe(false);
+      // the pearl it earned was counted
+      expect(d.pearlCounter.left).toBe(Math.max(0, level.pearls - 1));
     });
 
     it('respawns top the field back up to the level target', () => {
@@ -326,15 +394,16 @@ for (let index = 0; index < LEVELS.length; index++) {
       if (d.world.barrels.length > 0) {
         const keep = d.world.barrels[0]!;
         for (const b of [...d.world.barrels]) if (b !== keep) d.world.damageBarrel(b, 99);
-        for (const c of d.world.clams) d.world.openClam(c);
+        collectPearlsDownTo(d, 0);
       } else {
-        const keep = d.world.clams[0]!;
-        for (const c of d.world.clams) if (c !== keep) d.world.openClam(c);
+        collectPearlsDownTo(d, 1);
       }
       run(d, 1);
 
       expect(d.won).toBe(false);
-      expect(d.counter).toEqual({ done: goals - 1, total: goals });
+      // the invariant is one OUTSTANDING goal of either kind — which counter it
+      // sits in depends on how the board is authored
+      expect(d.goalsRemaining).toBe(1);
       expect(d.finaleArmed).toBe(true);
       expect(d.slingshot.assist).toBeGreaterThanOrEqual(0.9);
       expect(only(drain(d), 'finaleArmed')).toHaveLength(1);

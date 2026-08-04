@@ -11,6 +11,24 @@ export const SIM = {
   /** min approach speed for a duck to crack a clam (same bar as a match pop) */
   CLAM_HIT_SPEED: 126,
 
+  // ── the clam's open→spill→collect→shut cycle. A clam is a REPEATABLE pearl
+  // dispenser, not a one-shot goal: it opens, spills one pearl, the pearl flies
+  // to the HUD and decrements the counter, then the shell shuts and re-arms.
+  // Every number here is a tick count so the sim owns the whole sequence and the
+  // view can animate straight off it — nothing is timed twice in two places.
+  //
+  // CLAM_SPILL_TICKS matches the view's authored open beat exactly:
+  // `bump-inactive` (0.267s) + `bump` (0.30s) = 0.567s, the point at which the
+  // rig has genuinely removed the lid. Spilling earlier puts the pearl on top of
+  // a closed shell.
+  CLAM_SPILL_TICKS: 34,          // 0.567s — react + bump, then the pearl emerges
+  /** pearl's flight from the shell to the HUD counter */
+  PEARL_FLIGHT_TICKS: 42,        // 0.70s
+  /** the whole cycle: spill + flight + a beat open before the shell shuts */
+  CLAM_CYCLE_TICKS: 90,          // 1.50s
+  /** one physical collision opens a clam once (mirrors BARREL_HIT_COOLDOWN_TICKS) */
+  CLAM_HIT_COOLDOWN_TICKS: 12,
+
   // ── movement, from the official example verbatim (decomp xr, at 90 px/unit).
   // Drag is v *= 1/(1 + DRAG·dt) per fixed step, banded: a fresh shot flies
   // nearly free (ramping quartically over DRAG_RAMP_TICKS), but the moment it

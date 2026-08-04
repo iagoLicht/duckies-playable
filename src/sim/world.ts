@@ -47,21 +47,61 @@ export class World {
   }
 
   spawnClam(x: number, y: number, skin: Clam['skin'] = 'normal'): Clam {
-    const c: Clam = { id: this.nextId++, kind: 'clam', x, y, skin, open: false };
+    const c: Clam = {
+      id: this.nextId++, kind: 'clam', x, y, skin,
+      open: false, cycleTicks: 0, active: true, hitCooldown: 0,
+    };
     this.clams.push(c);
     this.events.push({ type: 'clamSpawned', clam: c });
     return c;
   }
 
   /**
-   * Crack a clam open and spill its pearl. Idempotent: a clam opens once, then
-   * stays a plain bumper for the rest of the level.
+   * Trigger a clam: a hard direct hit or a blast reaching it. Starts ONE open
+   * cycle — open, spill a single pearl, shut, re-arm — and is refused while a
+   * cycle is already running or once the clam has gone inert. That refusal is
+   * what guarantees "exactly one pearl per successful interaction": a blast that
+   * also lands a duck on the shell, or two blast generations overlapping, still
+   * only ever yields one.
    */
-  openClam(c: Clam): void {
-    if (c.open) return;
+  hitClam(c: Clam): void {
+    if (!c.active || c.open) return;
     c.open = true;
+    c.cycleTicks = 0;
     this.events.push({ type: 'clamOpened', id: c.id, x: c.x, y: c.y });
-    this.events.push({ type: 'pearlReleased', id: c.id, x: c.x, y: c.y });
+  }
+
+  /** Retire every clam: still solid, still visible, but no longer reactive. */
+  spendClams(): void {
+    for (const c of this.clams) c.active = false;
+    this.events.push({ type: 'clamsSpent' });
+  }
+
+  /**
+   * Drive each open clam through its cycle. The tick counts live in SIM so the
+   * view animates off the same numbers rather than re-deriving them:
+   *   CLAM_SPILL_TICKS   the rig has genuinely shed its lid -> the pearl emerges
+   *   + PEARL_FLIGHT_TICKS  the pearl reaches the HUD -> the counter drops by 1
+   *   CLAM_CYCLE_TICKS   the shell shuts and the clam is armed again
+   */
+  private tickClams(): void {
+    const collectAt = SIM.CLAM_SPILL_TICKS + SIM.PEARL_FLIGHT_TICKS;
+    for (const c of this.clams) {
+      if (c.hitCooldown > 0) c.hitCooldown--;
+      if (!c.open) continue;
+      c.cycleTicks++;
+      if (c.cycleTicks === SIM.CLAM_SPILL_TICKS) {
+        this.events.push({ type: 'pearlReleased', id: c.id, x: c.x, y: c.y });
+      }
+      if (c.cycleTicks === collectAt) {
+        this.events.push({ type: 'pearlCollected', id: c.id });
+      }
+      if (c.cycleTicks >= SIM.CLAM_CYCLE_TICKS) {
+        c.open = false;
+        c.cycleTicks = 0;
+        this.events.push({ type: 'clamClosed', id: c.id });
+      }
+    }
   }
 
   launch(id: number, vx: number, vy: number): void {
@@ -129,6 +169,7 @@ export class World {
     }
 
     this.tickFuses();
+    this.tickClams();
   }
 
   /**
@@ -289,10 +330,16 @@ export class World {
   }
 
   /**
-   * Clams are solid bumpers whether open or shut (the rig IS the game's bumper),
-   * so this always bounces. A hard enough approach — the same speed bar a match
-   * needs — additionally cracks a shut one open, mirroring the official's
-   * `caseContact`: bounce off static, then hit the case if the approach was fast.
+   * Clams are solid bumpers whether shut, open or spent (the rig IS the game's
+   * bumper), so this ALWAYS bounces — the deflection is level geometry and must
+   * not change when a clam goes inert. A hard enough approach — the same speed
+   * bar a match needs — additionally triggers an armed one, mirroring the
+   * official's `caseContact`: bounce off static, then hit the case if the
+   * approach was fast.
+   *
+   * The cooldown is the same guard the barrels use: adaptive substepping runs
+   * this up to 16 times per fixed step, and contact jitter can re-approach, so
+   * without it one physical collision could spend two pearls.
    */
   private collideDuckClams(): void {
     for (const d of this.ducks) {
@@ -311,7 +358,10 @@ export class World {
           d.vy -= (1 + SIM.RESTITUTION_STATIC) * vn * ny;
           this.events.push({ type: 'bumperHit', id: c.id, x: d.x, y: d.y });
         }
-        if (vn < -SIM.CLAM_HIT_SPEED) this.openClam(c);
+        if (vn < -SIM.CLAM_HIT_SPEED && c.hitCooldown === 0 && c.active && !c.open) {
+          c.hitCooldown = SIM.CLAM_HIT_COOLDOWN_TICKS;
+          this.hitClam(c);
+        }
       }
     }
   }
@@ -366,9 +416,11 @@ export class World {
         this.damageBarrel(b, 1);
       }
     }
-    // the official's explodeAt opens cases caught in the blast too
+    // the official's explodeAt opens cases caught in the blast too. hitClam
+    // refuses an already-open shell, so a chain whose generations overlap the
+    // same clam still spills exactly one pearl per cycle.
     for (const c of this.clams) {
-      if (Math.hypot(c.x - x, c.y - y) <= SIM.BLAST_R) this.openClam(c);
+      if (Math.hypot(c.x - x, c.y - y) <= SIM.BLAST_R) this.hitClam(c);
     }
   }
 }

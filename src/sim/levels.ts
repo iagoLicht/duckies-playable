@@ -2,8 +2,12 @@ import type { Colour } from './types';
 
 /**
  * One board of the campaign. A level is cleared when every barrel is destroyed
- * AND every clam has been cracked open; it is failed when the move budget runs
- * out with goals still standing and the board has come to rest.
+ * AND the level's pearl quota has been collected; it is failed when the move
+ * budget runs out with goals still standing and the board has come to rest.
+ *
+ * Clams are not goals — they are the DISPENSERS that serve the pearl quota, and
+ * they re-arm after every pearl. So `clams` authors the difficulty of reaching a
+ * pearl, and `pearls` authors how many you need.
  *
  * Design note — the move budget is the whole tension knob. Levels are tuned so
  * a competent player clears with roughly one shot to spare, which is what makes
@@ -19,7 +23,15 @@ export interface LevelDef {
   targetDucks: number;
   ducks: Array<{ colour: Colour; x: number; y: number }>;
   barrels: Array<{ x: number; y: number; hp: number; golden?: boolean }>;
+  /**
+   * Clams are pearl DISPENSERS, not one-shot goals: each one opens, spills a
+   * pearl, shuts and re-arms, so a single clam can service a quota of any size.
+   * Placement therefore controls *how hard the pearls are to reach*, and
+   * `pearls` controls *how many you need* — the two tune independently.
+   */
   clams: Array<{ x: number; y: number; skin?: 'normal' | 'gold' | 'baby' }>;
+  /** the level's pearl quota. Must be 0 when there are no clams to spill them. */
+  pearls: number;
   /** where respawning ducks may appear */
   spawnRegion: { x0: number; y0: number; x1: number; y1: number };
 }
@@ -67,8 +79,18 @@ export const FIELD = { x0: 46, y0: 220, x1: 674, y1: 1234, bumperY: 950 } as con
  *    Never below p50: that is unwinnable, not tense.
  *
  * Length targets for the board itself: bot p50 <= 9 shots and p90 <= 16. A board
- * that runs longer is a grind, and a grind is not tension. What the tuning pass
- * established about *shortening* one:
+ * that runs longer is a grind, and a grind is not tension.
+ *
+ * KNOWN BREACH (measured 2026-08-04, the clam-dispenser pass): levels 4, 7 and
+ * 10 now sit at p90 17. Before the clams became dispensers every multi-clam
+ * board measured p90 exactly 16 — right on the ceiling — and the cycle costs
+ * about one more shot, because a clam mid-cycle cannot be re-triggered, so a
+ * blast that reaches an already-open shell is spent for nothing. Quota size is
+ * NOT the cause and trimming it is not the fix: Deflection measured p90 17 at
+ * quota 3 and p90 17 again at quota 2, while its clam activations fell 3.3 ->
+ * 2.3. p50 is unmoved on every board, so this is a tail, not a longer level.
+ *
+ * What the tuning pass established about *shortening* one:
  *
  *  - BARRELS ARE SOFT, so hp is a weak knob in both directions: a launched duck
  *    ricochets and re-hits, and dropping an hp2 to hp1 typically buys under a
@@ -98,6 +120,7 @@ export const LEVELS: LevelDef[] = [
   {
     name: 'Bath Time',
     moves: 8,
+    pearls: 0,
     assist: 0.55,
     targetDucks: 4,
     ducks: [
@@ -121,13 +144,19 @@ export const LEVELS: LevelDef[] = [
   // path of every shot aimed down the board, with the two barrels parked behind
   // it so the natural follow-through carries on into them. The lesson is that a
   // clam is a target you *hit*, and that it kicks the duck back at you.
-  // Budget intent: 3 goals / 3 hits in 9 shots. Still a teaching board, so the
-  // budget is the measured p90 — nine runs in ten of a mediocre bot fit inside
-  // it. A player who spends two shots pinballing off the clam without cracking
-  // it will notice the counter; a player who spends five will still get there.
+  // Budget intent: 2 crates + 2 pearls in 9 shots. The pearl quota is 2 from a
+  // SINGLE clam on purpose — this is where the player learns the shell re-opens.
+  // A quota of 1 would teach the opposite (hit it once, done) and every later
+  // level would then contradict the lesson. Still a teaching board, so the budget
+  // is the measured p90 — nine runs in ten of a mediocre bot fit inside it. A
+  // player who spends two shots pinballing off the clam without cracking it will
+  // notice the counter; a player who spends five will still get there.
   {
     name: 'Pearl Diver',
     moves: 9,
+    // 2 from the single clam: the teaching level for the dispenser, so it has to
+    // show the shell RE-OPENING. One pearl would teach the old one-shot rule.
+    pearls: 2,
     assist: 0.6,
     targetDucks: 4,
     ducks: [
@@ -160,6 +189,7 @@ export const LEVELS: LevelDef[] = [
   {
     name: 'Chain Gang',
     moves: 5,
+    pearls: 0,
     assist: 0.5,
     targetDucks: 5,
     ducks: [
@@ -194,10 +224,13 @@ export const LEVELS: LevelDef[] = [
   // enough. The low pair also moved up off the floor to y1050, close enough that
   // the low clam's blast lens overlaps both (175 and 234 apart, so a pop placed
   // between clam and crate retires two goals) — the deflector now pays out.
-  // Budget intent: 6 goals / 6 hits in 11 shots.
+  // Budget intent: 4 crates + 3 pearls in 12 shots (measured p75; was 11 before
+  // the clams became dispensers). Three pearls from two clams, so at least one
+  // shell has to be worked twice.
   {
     name: 'Deflection',
-    moves: 11,
+    moves: 12,
+    pearls: 3,
     assist: 0.45,
     targetDucks: 4,
     ducks: [
@@ -234,13 +267,15 @@ export const LEVELS: LevelDef[] = [
   // 240/360/480, so a pop that settles above a gap (e.g. (300,990), 117 from
   // each of two crates) takes a PAIR. Punching through used to buy you four
   // more hits spread across the floor; it now buys the floor in two pops.
-  // Budget intent: 5 goals / 5 hits in 12 shots. Doing the clams one at a time
-  // is survivable but leaves almost nothing for the barrels — that is the
-  // near-miss. (Clams are the real difficulty currency: they need a direct fast
-  // hit or a blast centred within 135, where a barrel just needs to be bumped.)
+  // Budget intent: 3 crates + 4 pearls in 12 shots — two full serves from each
+  // clam, which is what earns the name. Doing them one at a time is survivable
+  // but leaves almost nothing for the barrels — that is the near-miss. (Pearls
+  // are the real difficulty currency: a clam needs a direct fast hit or a blast
+  // centred within 135, where a barrel just needs to be bumped.)
   {
     name: 'Twin Pearls',
     moves: 12,
+    pearls: 4,
     assist: 0.45,
     targetDucks: 3,
     ducks: [
@@ -274,6 +309,7 @@ export const LEVELS: LevelDef[] = [
   {
     name: 'Ironclad',
     moves: 8,
+    pearls: 0,
     assist: 0.4,
     targetDucks: 5,
     ducks: [
@@ -311,11 +347,13 @@ export const LEVELS: LevelDef[] = [
   // shadowed the whole floor, and the bot burned shots bouncing off it into
   // nothing. At 800 it still deflects into the right bumper — it just no longer
   // roofs the crates it is supposed to feed.
-  // Budget intent: 6 goals / 6 hits in 11 shots, and at least two of those hits
-  // really do want to arrive sideways.
+  // Budget intent: 4 crates + 4 pearls in 12 shots (measured p75; was 11 before
+  // the clams became dispensers), and at least two of those hits really do want
+  // to arrive sideways.
   {
     name: 'Pinball',
-    moves: 11,
+    moves: 12,
+    pearls: 4,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -364,10 +402,11 @@ export const LEVELS: LevelDef[] = [
   // at that price it was no choice at all — you smashed, because you could not
   // afford anything else. At four, "smash it" and "thread it" are genuinely
   // competing plans, which is what the level is about.
-  // Budget intent: 6 goals / 7 hits in 11 shots, with the ordering forced.
+  // Budget intent: 4 crates + 3 pearls in 11 shots, with the ordering forced.
   {
     name: 'The Vault',
     moves: 11,
+    pearls: 3,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -404,6 +443,7 @@ export const LEVELS: LevelDef[] = [
   {
     name: 'The Gauntlet',
     moves: 8,
+    pearls: 0,
     assist: 0.35,
     targetDucks: 5,
     ducks: [
@@ -454,11 +494,14 @@ export const LEVELS: LevelDef[] = [
   // barrel's burial spot. Every crate is now hp1, the golden included: with
   // finaleArmed at assist 0.9 the closing shot lands, and one hit ends the ad on
   // the gold shower rather than three.
-  // Budget intent: 7 goals / 7 hits in 13 shots. The intended clear still takes
-  // two clams with one pop and arrives at the golden barrel on the last shot.
+  // Budget intent: 4 crates + 6 pearls in 13 shots — the campaign's largest
+  // quota, off three clams. The intended clear still takes two clams with one
+  // pop (which now serves two pearls at once) and arrives at the golden barrel
+  // on the last shot.
   {
     name: 'The Golden Pearl',
     moves: 13,
+    pearls: 6,
     assist: 0.4,
     // 6: the three clams cut the tub into narrow lanes, so the board wants a
     // healthy duck population to guarantee a legal duck-to-duck line at all times

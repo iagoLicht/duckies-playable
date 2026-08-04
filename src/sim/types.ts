@@ -39,10 +39,14 @@ export interface Barrel {
 }
 
 /**
- * The clam (the pack's oyster rig). Starts shut and dormant; a duck striking it
- * hard enough, or a blast reaching it, cracks it open and spills a pearl. It is
- * solid at all times — open or shut it bounces ducks, because the rig is the
- * game's bumper ("GameEntityBumper renders as this oyster", asset manifest).
+ * The clam (the pack's oyster rig). A REPEATABLE pearl dispenser, not a one-shot
+ * goal: a duck striking it hard enough, or a blast reaching it, opens the shell,
+ * which spills exactly one pearl, then shuts and re-arms. It is solid at all
+ * times — open, shut or spent it bounces ducks, because the rig is the game's
+ * bumper ("GameEntityBumper renders as this oyster", asset manifest).
+ *
+ * Once the level's pearl goal is met every clam goes `active: false`: still
+ * solid, still visible, but inert — no open beat and no further pearls.
  */
 export interface Clam {
   id: number;
@@ -50,8 +54,14 @@ export interface Clam {
   x: number;
   y: number;
   skin: 'normal' | 'gold' | 'baby';
-  /** false until a hard duck hit or a blast opens it */
+  /** true for the whole open cycle — an open clam cannot be re-triggered */
   open: boolean;
+  /** fixed steps elapsed in the current cycle; drives spill, collect and shut */
+  cycleTicks: number;
+  /** false once the pearl goal is met: a plain solid bumper from then on */
+  active: boolean;
+  /** one physical collision opens the shell once, across substeps and jitter */
+  hitCooldown: number;
 }
 
 export type SimEvent =
@@ -70,8 +80,17 @@ export type SimEvent =
   | { type: 'clamSpawned'; clam: Clam }
   /** the clam took the hit and is cracking open (view plays the open sequence) */
   | { type: 'clamOpened'; id: number; x: number; y: number }
-  /** the pearl it spills, released once the shell is open */
+  /** the single pearl it spills, once the lid is genuinely off (CLAM_SPILL_TICKS) */
   | { type: 'pearlReleased'; id: number; x: number; y: number }
+  /** the pearl reached the HUD counter — this, and only this, decrements it.
+   *  The World does not know the level's goal; the Director counts and reports. */
+  | { type: 'pearlCollected'; id: number }
+  /** the shell has shut again and is ready to be activated a second time */
+  | { type: 'clamClosed'; id: number }
+  /** the pearl goal is met: every clam is now an inert (but visible) bumper */
+  | { type: 'clamsSpent' }
+  /** pearls REMAINING out of the level's goal — the HUD reads "left/total" */
+  | { type: 'pearlCounter'; left: number; total: number }
   | { type: 'bumperHit'; id: number; x: number; y: number }
   | { type: 'levelStarted'; index: number; name: string; moves: number }
   | { type: 'movesLeft'; left: number }

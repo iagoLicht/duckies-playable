@@ -98,25 +98,18 @@ const CT_SHELL = 0;
 const CT_RIPPLE = 1;
 /** the official's bumper-hit burst tint on this rig */
 const CLAM_TINT = 0xFFB0D9;
-/** `bump-inactive`'s authored length — the react beat, before the lid lifts */
-const CLAM_REACT_TIME = 0.27;
-/**
- * When the shell is ACTUALLY open. `bump` re-attaches the lid and the mouth for
- * most of its run and only strips them at the very end, so the clam reads shut
- * until react (0.267s) + bump (0.30s) have both played. Spilling the pearl at
- * the end of the react beat — which is what this used to do — put it on top of
- * a closed shell, in the one frame the lid is most firmly on.
- */
-const CLAM_OPEN_TIME = CLAM_REACT_TIME + 0.3;
+// When the shell is ACTUALLY open: `bump` re-attaches the lid and the mouth for
+// most of its run and only strips them at the very end, so the clam reads shut
+// until `bump-inactive` (0.267s) + `bump` (0.30s) have both played. That total
+// is what SIM.CLAM_SPILL_TICKS (34 ticks = 0.567s) encodes — the sim owns the
+// timeline now, and the pearl emerges on the tick the lid is genuinely off.
+// Asserted in tests/sim/clam.test.ts so the two cannot drift apart.
 
-// the pearl the shell spills: a quick Back.easeOut pop, a short rise as it
-// fades in, then it hangs there breathing. It clears the shell's top rim
-// (~55px above centre) with just enough overlap to read as coming out of it.
+// the pearl the shell spills: a quick Back.easeOut pop, a lift clear of the
+// shell's top rim (~55px above centre), then the flight to the HUD counter.
 const PEARL_POP_TIME = 0.25;
 const PEARL_RISE = 66;
 const PEARL_RISE_TIME = 0.45;
-const PEARL_BOB = 4;
-const PEARL_BOB_PERIOD = 2.4;
 
 /** Phaser's Back.easeOut, used by the official spawn pop-in */
 const backOut = (t: number): number => {
@@ -192,6 +185,11 @@ const MOVES_X = 360;
 const MOVES_PLATE_SCALE = 0.72;
 const GOAL_X = 566;
 const GOAL_PLATE_SCALE = 0.5;
+// The pearl counter mirrors the crate counter about the moves plate. Measured
+// occupancy of the row: moves 255..465, crates 493..639 — so 154 puts the pearl
+// plate at 81..227, symmetric with the crates and clear of everything.
+const PEARL_X = 154;
+const PEARL_PLATE_SCALE = 0.5;
 /** the counter number punches this big for a beat whenever it changes */
 const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
 
@@ -269,6 +267,13 @@ export class GameScene {
   /** HUD readouts, built in init and driven purely by sim events */
   private movesText!: Text;
   private goalText!: Text;
+  private pearlText!: Text;
+  /** plate + pearl icon + count; hidden wholesale on a level with no clams */
+  private pearlGroup = new Container();
+  /** where a spilled pearl flies to — set once the HUD is laid out */
+  private pearlTarget = { x: PEARL_X - 54, y: HUD_ROW_Y - 2 };
+  /** in-flight pearls by clam id; `pearlCollected` lands the matching one */
+  private pearlFlights = new Map<number, () => void>();
 
   constructor(private app: Application, private seed: number, startLevel = 0) {
     // clamped so a stray ?level= can never ask the Director for a level that
@@ -644,14 +649,29 @@ export class GameScene {
       case 'clamOpened':
         this.openClamView(e.id);
         break;
-      case 'pearlReleased': {
-        // the sim spills the pearl on the same tick it cracks the shell; hold it
-        // back until the lid is genuinely off so it emerges from an open clam
-        // instead of sprouting out of a closed one
-        const { x, y } = e;
-        this.after(CLAM_OPEN_TIME, () => this.releasePearl(x, y));
+      case 'pearlReleased':
+        // no view-side delay any more: the sim spills at CLAM_SPILL_TICKS, which
+        // IS the rig's react + bump length, so the pearl already emerges from a
+        // genuinely open shell. One timeline, owned by the sim.
+        this.releasePearl(e.id, e.x, e.y);
         break;
-      }
+      case 'pearlCollected':
+        // the sim says it has arrived — land it NOW, whatever the tween thinks
+        this.pearlFlights.get(e.id)?.();
+        break;
+      case 'clamClosed':
+        this.closeClamView(e.id);
+        break;
+      case 'clamsSpent':
+        // Deliberately no view work. A spent clam is already sitting in the
+        // rig's `inactive` (shut, dormant) pose, because that is where every
+        // close leaves it — and the sim has stopped triggering it, so it simply
+        // never animates again. It stays visible and still bounces ducks.
+        break;
+      case 'pearlCounter':
+        this.pearlGroup.visible = e.total > 0;
+        this.setCounter(this.pearlText, `${e.left}/${e.total}`);
+        break;
       case 'bumperHit':
         // fires on every glancing contact, so it stays to one cheap star
         this.burst(e.x, e.y, CLAM_TINT, 0.5);
@@ -708,6 +728,7 @@ export class GameScene {
     this.spawnQueue.length = 0;
     this.spawnTimer = 0;
     this.spawning.clear();
+    this.pearlFlights.clear();
     this.ringMode.clear();
     this.aimBoneRot.clear();
     this.flashOn.clear();
@@ -867,12 +888,40 @@ export class GameScene {
   }
 
   /**
-   * The pearl the shell spills: the pack's 52x52 glossy bead, popped in with
-   * the official's Back overshoot, rising clear of the shell as it fades up,
-   * then left breathing on the water. It lives in `fx` so it sits above the
-   * clam. Paired with the bumper's pink star and a foam bloom at the seam.
+   * The shell shutting again, so the clam can be triggered a second time.
+   *
+   * The rig has no authored "close" — the pack ships only the opening. But
+   * `bump-inactive` (0.27s) is the shut attachment set plus an `oyster` bone
+   * squash, authored as "it was hit but stayed closed", and played out of the
+   * awake `idle` it re-attaches the lid and the dormant eyes with a jolt: the
+   * opening in reverse, using the rig's own animation rather than a hand-rolled
+   * tween. It then rests on `inactive`, the 0-length dormant pose, which is
+   * exactly where addClam starts every clam — so an armed clam and a re-armed
+   * clam are in provably the same state.
    */
-  private releasePearl(x: number, y: number): void {
+  private closeClamView(id: number): void {
+    const v = this.clamViews.get(id);
+    if (!v) return;
+    v.state.setAnimation(CT_SHELL, 'bump-inactive', false);
+    v.state.addAnimation(CT_SHELL, 'inactive', false, 0);
+  }
+
+  /**
+   * The pearl the shell spills: the pack's 52x52 glossy bead, popped in with the
+   * official's Back overshoot, lifted clear of the shell, then flown up to the
+   * HUD's pearl counter — where its arrival is what the player reads as the
+   * count dropping.
+   *
+   * The tween runs for SIM.PEARL_FLIGHT_TICKS worth of WALL time, but it is not
+   * allowed to finish on its own: it stalls just short of the counter until the
+   * sim emits `pearlCollected`, which calls the registered `land`. Wall time and
+   * sim time genuinely do drift — `accumulator += Math.min(dt, 0.1)` drops sim
+   * time after a long frame, and `hitstop` freezes the sim outright while the
+   * view keeps animating, which happens on every pop. Timing the landing off the
+   * clock alone would let the pearl touch the counter a beat before the number
+   * moved. The sim decides when it has arrived; this only draws the trip.
+   */
+  private releasePearl(id: number, x: number, y: number): void {
     this.burst(x, y, CLAM_TINT, 0.8);
     this.foamFlash(x, y, CLAM_TINT);
     const p = new Sprite(this.pearlTex);
@@ -881,27 +930,43 @@ export class GameScene {
     p.scale.set(0);
     p.alpha = 0;
     this.fx.addChild(p);
+    const flight = SIM.PEARL_FLIGHT_TICKS * SIM.DT;
+    const target = this.pearlTarget;
+    // lift clear of the shell first, then set off — so it reads as coming OUT of
+    // the clam rather than being yanked at the HUD from the first frame
+    const liftY = y - PEARL_RISE;
     let t = 0;
+    // the tween coasts to here and waits; only the sim closes the last stretch
+    const HOLD = 0.97;
+    const land = (): void => {
+      this.pearlFlights.delete(id);
+      this.app.ticker.remove(anim);
+      if (p.destroyed) return;
+      // it lands ON its own icon in the counter
+      this.burst(target.x, target.y, CLAM_TINT, 0.55);
+      p.destroy();
+    };
     const anim = (tk: { deltaMS: number }): void => {
       t += tk.deltaMS / 1000;
-      // the pearl bobs for the rest of the level, so unlike the other fx this
-      // one has no natural end — it must stop when its sprite leaves the board
-      // (loadLevel unparents everything in `fx`), or it ticks on for ever
+      // loadLevel unparents everything in `fx`; without this the tween would
+      // outlive its own sprite and tick on for ever
       if (p.destroyed || p.parent === null) {
+        this.pearlFlights.delete(id);
         this.app.ticker.remove(anim);
         if (!p.destroyed) p.destroy();
         return;
       }
-      p.scale.set(backOut(Math.min(1, t / PEARL_POP_TIME)));
+      const g = quadOut(Math.min(HOLD, t / flight));
+      p.scale.set(backOut(Math.min(1, t / PEARL_POP_TIME)) * (1 - 0.45 * g));
       p.alpha = Math.min(1, t / PEARL_POP_TIME);
       const rise = quadOut(Math.min(1, t / PEARL_RISE_TIME)) * PEARL_RISE;
-      // once the rise is spent the bob takes over from exactly where it ended,
-      // so there is no seam between the two
-      const bob = t < PEARL_RISE_TIME
-        ? 0
-        : PEARL_BOB * (1 - Math.cos(((t - PEARL_RISE_TIME) / PEARL_BOB_PERIOD) * Math.PI * 2)) / 2;
-      p.y = y - rise + bob;
+      // travel from the lifted position to the counter; the horizontal lead runs
+      // ahead of the vertical so the path bows outward instead of cutting a
+      // straight diagonal across the tub
+      p.x = x + (target.x - x) * quadOut(g);
+      p.y = (y - rise) + (target.y - liftY) * (g * g);
     };
+    this.pearlFlights.set(id, land);
     this.app.ticker.add(anim);
   }
 
@@ -1193,9 +1258,25 @@ export class GameScene {
     this.goalText = label(34, 6);
     this.goalText.position.set(GOAL_X + 20, HUD_ROW_Y);
 
+    // The icon is the pearl ITSELF, not goal-Bumper: the objective counts pearls,
+    // and a flying pearl landing on its own likeness is what sells the link
+    // between the spill and the number dropping. (goal-Bumper belongs to a "hit
+    // the bumper N times" objective, which is a different goal entirely.)
+    const pearlIcon = new Sprite(this.pearlTex);
+    pearlIcon.anchor.set(0.5);
+    pearlIcon.width = pearlIcon.height = 52;
+    pearlIcon.position.set(PEARL_X - 54, HUD_ROW_Y - 2);
+    this.pearlText = label(34, 6);
+    this.pearlText.position.set(PEARL_X + 22, HUD_ROW_Y);
+    // where a spilled pearl flies to — the icon, so it lands on the counter
+    this.pearlTarget = { x: PEARL_X - 54, y: HUD_ROW_Y - 2 };
+    // a level with no clams shows no pearl counter at all
+    this.pearlGroup.addChild(chip(PEARL_X, PEARL_PLATE_SCALE), pearlIcon, this.pearlText);
+
     this.hud.addChild(
       chip(MOVES_X, MOVES_PLATE_SCALE), movesLabel, this.movesText,
       chip(GOAL_X, GOAL_PLATE_SCALE), goalIcon, this.goalText,
+      this.pearlGroup,
     );
   }
 
