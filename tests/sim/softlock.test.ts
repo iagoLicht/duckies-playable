@@ -23,6 +23,13 @@ const legalShotExists = (d: Director): boolean => {
 };
 
 describe('the board can never become unplayable', () => {
+  // Explicit timeout: this sweeps 4 ducks x 48 directions through predictShot on
+  // every one of 360 ticks, which is ~2s alone but tips past vitest's 5s default
+  // under full-suite CPU contention. The clams' bumper fling made that worse
+  // across the board — faster ducks drive the adaptive substepper toward its
+  // 16-substep cap far more often, so every tick costs more collision work (the
+  // whole suite went 47s -> 173s). The substeps are load-bearing, not waste:
+  // they are what stops a duck leaving a clam at 2600px/s from tunnelling.
   it('rescues a stocked board that has no legal shot left', () => {
     const d = new Director(11, 0);
     d.start();
@@ -55,7 +62,7 @@ describe('the board can never become unplayable', () => {
     // the guard noticed and put a duck somewhere it can be used
     expect(d.world.ducks.length).toBeGreaterThan(before);
     expect(legalShotExists(d)).toBe(true);
-  });
+  }, 30_000);
 
   it('leaves a healthy board alone — no phantom ducks', () => {
     const d = new Director(11, 0);

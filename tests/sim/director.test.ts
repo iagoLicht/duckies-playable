@@ -270,8 +270,8 @@ for (let index = 0; index < LEVELS.length; index++) {
       const before = d.pearlCounter.left;
       d.world.hitClam(d.world.clams[0]!);
 
-      // spilled but still in flight: the number has not moved
-      for (let i = 0; i < SIM.CLAM_SPILL_TICKS + SIM.PEARL_FLIGHT_TICKS - 1; i++) d.step(SIM.DT);
+      // spilled on the impact frame but still in flight: the number has not moved
+      for (let i = 0; i < SIM.PEARL_FLIGHT_TICKS - 1; i++) d.step(SIM.DT);
       expect(d.pearlCounter.left).toBe(before);
 
       d.step(SIM.DT);
@@ -346,7 +346,7 @@ for (let index = 0; index < LEVELS.length; index++) {
       d.world.hitClam(d.world.clams[0]!);
       // ticks, not seconds — run() takes seconds, and the whole point of this
       // test is the exact window between the crack and the pearl landing
-      for (let i = 0; i < SIM.CLAM_SPILL_TICKS + SIM.PEARL_FLIGHT_TICKS; i++) d.step(SIM.DT);
+      for (let i = 0; i < SIM.PEARL_FLIGHT_TICKS; i++) d.step(SIM.DT);
 
       expect(d.failed).toBe(false);
       expect(has(drain(d), 'levelFailed')).toBe(false);

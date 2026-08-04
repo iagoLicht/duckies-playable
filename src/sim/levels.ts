@@ -81,14 +81,26 @@ export const FIELD = { x0: 46, y0: 220, x1: 674, y1: 1234, bumperY: 950 } as con
  * Length targets for the board itself: bot p50 <= 9 shots and p90 <= 16. A board
  * that runs longer is a grind, and a grind is not tension.
  *
- * KNOWN BREACH (measured 2026-08-04, the clam-dispenser pass): levels 4, 7 and
- * 10 now sit at p90 17. Before the clams became dispensers every multi-clam
- * board measured p90 exactly 16 — right on the ceiling — and the cycle costs
- * about one more shot, because a clam mid-cycle cannot be re-triggered, so a
- * blast that reaches an already-open shell is spent for nothing. Quota size is
- * NOT the cause and trimming it is not the fix: Deflection measured p90 17 at
- * quota 3 and p90 17 again at quota 2, while its clam activations fell 3.3 ->
- * 2.3. p50 is unmoved on every board, so this is a tail, not a longer level.
+ * RESOLVED (2026-08-04, the clam-fling pass): the dispenser cycle had briefly
+ * pushed levels 4, 7 and 10 to p90 17. Giving the clams a real bumper fling
+ * (CLAM_KICK/CLAM_KEEP, replacing the barrels' half-energy reflection) more than
+ * paid it back — every clam board is now well inside the ceiling, and the
+ * budgets fell hard with them:
+ *
+ *     level          p90 before -> after     moves before -> after
+ *     4 Deflection        17 -> 13                12 -> 9
+ *     5 Twin Pearls       16 -> 12                12 -> 8
+ *     7 Pinball           17 -> 13                12 -> 9
+ *     8 The Vault         14 -> 10                11 -> 8
+ *    10 The Golden Pearl  17 ->  7                13 -> 5
+ *
+ * A duck thrown off a shell now carries enough speed to reach another goal, so
+ * shots pay two and three times over. Clam-free boards (1, 3, 6, 9) are byte-for
+ * -byte unchanged, which is the control that says the fling is the whole cause.
+ *
+ * CAVEAT on all five: the tuning bot fires random legal aims, and a hard
+ * deflection rewards spray more than it rewards a human aiming one target at a
+ * time. These budgets are measured but unplayed; level 10 especially.
  *
  * What the tuning pass established about *shortening* one:
  *
@@ -224,12 +236,13 @@ export const LEVELS: LevelDef[] = [
   // enough. The low pair also moved up off the floor to y1050, close enough that
   // the low clam's blast lens overlaps both (175 and 234 apart, so a pop placed
   // between clam and crate retires two goals) — the deflector now pays out.
-  // Budget intent: 4 crates + 3 pearls in 12 shots (measured p75; was 11 before
-  // the clams became dispensers). Three pearls from two clams, so at least one
-  // shell has to be worked twice.
+  // Budget intent: 4 crates + 3 pearls in 9 shots (measured p75). Three pearls
+  // from two clams, so at least one shell has to be worked twice. The budget
+  // fell 12 -> 9 when the clams got their bumper fling: a duck thrown off a
+  // shell now carries enough speed to reach a second goal, so shots pay twice.
   {
     name: 'Deflection',
-    moves: 12,
+    moves: 9,
     pearls: 3,
     assist: 0.45,
     targetDucks: 4,
@@ -274,7 +287,7 @@ export const LEVELS: LevelDef[] = [
   // centred within 135, where a barrel just needs to be bumped.)
   {
     name: 'Twin Pearls',
-    moves: 12,
+    moves: 8,
     pearls: 4,
     assist: 0.45,
     targetDucks: 3,
@@ -352,7 +365,7 @@ export const LEVELS: LevelDef[] = [
   // to arrive sideways.
   {
     name: 'Pinball',
-    moves: 12,
+    moves: 9,
     pearls: 4,
     assist: 0.4,
     targetDucks: 4,
@@ -405,7 +418,7 @@ export const LEVELS: LevelDef[] = [
   // Budget intent: 4 crates + 3 pearls in 11 shots, with the ordering forced.
   {
     name: 'The Vault',
-    moves: 11,
+    moves: 8,
     pearls: 3,
     assist: 0.4,
     targetDucks: 4,
@@ -494,13 +507,25 @@ export const LEVELS: LevelDef[] = [
   // barrel's burial spot. Every crate is now hp1, the golden included: with
   // finaleArmed at assist 0.9 the closing shot lands, and one hit ends the ad on
   // the gold shower rather than three.
-  // Budget intent: 4 crates + 6 pearls in 13 shots — the campaign's largest
-  // quota, off three clams. The intended clear still takes two clams with one
-  // pop (which now serves two pearls at once) and arrives at the golden barrel
-  // on the last shot.
+  // Budget intent: 4 crates + 6 pearls in 5 shots — the campaign's largest quota
+  // off its smallest budget, and by far the densest board.
+  //
+  // That budget is the measured p75 and it moved 13 -> 5 in one pass, entirely
+  // from the clams' bumper fling. Three clams in narrow lanes is the worst case
+  // for a hard deflection: a duck thrown off one shell reaches another, triggers
+  // it, and is thrown again, so a single shot can serve three or four pearls.
+  // Clam activations did not change (6.8 either way) — the shots to get them
+  // halved. p50 fell 8 -> 4.
+  //
+  // FLAGGED, not settled: this makes the finale the SHORTEST board in the
+  // campaign, after an 8-shot Gauntlet, which is odd pacing for a climax. It is
+  // also the level where the tuning bot's random spray benefits most from the
+  // fling, so its shot count may flatter a bot over a human who aims one clam at
+  // a time. Wants human play-testing before the number is trusted; if it plays
+  // too easy the honest fix is a harder board, not a tighter budget.
   {
     name: 'The Golden Pearl',
-    moves: 13,
+    moves: 5,
     pearls: 6,
     assist: 0.4,
     // 6: the three clams cut the tub into narrow lanes, so the board wants a

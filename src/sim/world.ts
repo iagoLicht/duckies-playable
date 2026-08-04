@@ -68,7 +68,11 @@ export class World {
     if (!c.active || c.open) return;
     c.open = true;
     c.cycleTicks = 0;
+    // ONE impact frame: the shell's squash, its opening and the pearl all start
+    // here, on the same tick the duck is flung away. Nothing is staged behind a
+    // delay — the view reads both of these events off the same drain.
     this.events.push({ type: 'clamOpened', id: c.id, x: c.x, y: c.y });
+    this.events.push({ type: 'pearlReleased', id: c.id, x: c.x, y: c.y });
   }
 
   /** Retire every clam: still solid, still visible, but no longer reactive. */
@@ -78,22 +82,19 @@ export class World {
   }
 
   /**
-   * Drive each open clam through its cycle. The tick counts live in SIM so the
-   * view animates off the same numbers rather than re-deriving them:
-   *   CLAM_SPILL_TICKS   the rig has genuinely shed its lid -> the pearl emerges
-   *   + PEARL_FLIGHT_TICKS  the pearl reaches the HUD -> the counter drops by 1
-   *   CLAM_CYCLE_TICKS   the shell shuts and the clam is armed again
+   * Drive each open clam through its cycle. The spill is NOT here — it happens
+   * on the impact tick in hitClam, so the hit reads as one event. What is left
+   * runs on tick counts that live in SIM, so the view animates off the same
+   * numbers rather than re-deriving them:
+   *   PEARL_FLIGHT_TICKS  the pearl reaches the HUD -> the counter drops by 1
+   *   CLAM_CYCLE_TICKS    the shell shuts and the clam is armed again
    */
   private tickClams(): void {
-    const collectAt = SIM.CLAM_SPILL_TICKS + SIM.PEARL_FLIGHT_TICKS;
     for (const c of this.clams) {
       if (c.hitCooldown > 0) c.hitCooldown--;
       if (!c.open) continue;
       c.cycleTicks++;
-      if (c.cycleTicks === SIM.CLAM_SPILL_TICKS) {
-        this.events.push({ type: 'pearlReleased', id: c.id, x: c.x, y: c.y });
-      }
-      if (c.cycleTicks === collectAt) {
+      if (c.cycleTicks === SIM.PEARL_FLIGHT_TICKS) {
         this.events.push({ type: 'pearlCollected', id: c.id });
       }
       if (c.cycleTicks >= SIM.CLAM_CYCLE_TICKS) {
@@ -352,12 +353,29 @@ export class World {
         d.x = c.x + nx * minD;
         d.y = c.y + ny * minD;
         if (this.phase === 0) this.phase = 1;
+        const speed = Math.hypot(d.vx, d.vy);
         const vn = d.vx * nx + d.vy * ny;
         if (vn < 0) {
-          d.vx -= (1 + SIM.RESTITUTION_STATIC) * vn * nx;
-          d.vy -= (1 + SIM.RESTITUTION_STATIC) * vn * ny;
+          // FLING, not reflect. The barrels' half-energy bounce is wrong for
+          // this rig — it is the game's pinball bumper. Same shape as the wall
+          // bumper kick in collideWalls: the tangential glide survives untouched
+          // and the outgoing normal speed is a fixed kick plus a share of the
+          // duck's TOTAL speed, so a graze is still redirected hard and a
+          // head-on slam comes back nearly as fast as it arrived.
+          const tx = d.vx - vn * nx, ty = d.vy - vn * ny;
+          const kick = SIM.CLAM_KICK + SIM.CLAM_KEEP * speed;
+          d.vx = tx + nx * kick;
+          d.vy = ty + ny * kick;
+          const out = Math.hypot(d.vx, d.vy);
+          if (out > SIM.MAX_SPEED) {
+            const f = SIM.MAX_SPEED / out;
+            d.vx *= f;
+            d.vy *= f;
+          }
           this.events.push({ type: 'bumperHit', id: c.id, x: d.x, y: d.y });
         }
+        // the trigger reads the PRE-fling approach speed, so raising the kick
+        // cannot accidentally change what counts as a hard enough hit
         if (vn < -SIM.CLAM_HIT_SPEED && c.hitCooldown === 0 && c.active && !c.open) {
           c.hitCooldown = SIM.CLAM_HIT_COOLDOWN_TICKS;
           this.hitClam(c);

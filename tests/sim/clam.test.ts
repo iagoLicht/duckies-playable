@@ -23,8 +23,8 @@ const TOUCH = SIM.DUCK_R + SIM.CLAM_R;
 const CLAM = { x: 360, y: 700 };
 /** far enough left of the clam to build up speed, clear of the tub wall (x >= 92) */
 const LANE_X = 150;
-/** the tick the pearl lands on the counter, measured from the shell opening */
-const COLLECT_AT = SIM.CLAM_SPILL_TICKS + SIM.PEARL_FLIGHT_TICKS;
+/** the tick the pearl lands on the counter, measured from the IMPACT */
+const COLLECT_AT = SIM.PEARL_FLIGHT_TICKS;
 
 const steps = (w: World, n: number): void => {
   for (let i = 0; i < n; i++) w.step(SIM.DT);
@@ -116,8 +116,8 @@ describe('clam — a solid bumper that dispenses pearls', () => {
 
     expect(c.open).toBe(true);
     expect(only(w.events, 'clamOpened')).toHaveLength(1);
-    // the pearl is NOT spilled on the same tick — the lid is still on
-    expect(only(w.events, 'pearlReleased')).toHaveLength(0);
+    // a blast triggers the same one-frame impact as a duck hit
+    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
   });
 
   it('a blast outside BLAST_R leaves it shut', () => {
@@ -146,20 +146,49 @@ describe('clam — a solid bumper that dispenses pearls', () => {
 
   // ── the cycle ─────────────────────────────────────────────────────────────
 
-  it('runs the full cycle on the tick counts the view animates against', () => {
+  it('the impact is ONE frame: open and pearl land on the same tick', () => {
+    const w = new World(1);
+    const c = w.spawnClam(CLAM.x, CLAM.y);
+    w.events.length = 0;
+    w.hitClam(c);
+
+    // no stepping at all — both are already out, in order, before any tick runs
+    expect(w.events).toEqual([
+      { type: 'clamOpened', id: c.id, x: c.x, y: c.y },
+      { type: 'pearlReleased', id: c.id, x: c.x, y: c.y },
+    ]);
+  });
+
+  it('a duck hit spills the pearl on the CONTACT tick, not a beat later', () => {
+    // the end-to-end version of the above: the pearl must not lag the bounce
+    const w = new World(1);
+    const c = w.spawnClam(CLAM.x, CLAM.y);
+    const d = w.spawnDuck('red', LANE_X, CLAM.y);
+    w.launch(d.id, SIM.LAUNCH_SPEED, 0);
+    w.events.length = 0;
+
+    for (let i = 0; i < 240; i++) {
+      w.step(SIM.DT);
+      const opened = w.events.some((e) => e.type === 'clamOpened');
+      if (opened) {
+        // same drain: the bounce, the opening and the spill are one event batch
+        expect(w.events.some((e) => e.type === 'bumperHit')).toBe(true);
+        expect(w.events.some((e) => e.type === 'pearlReleased')).toBe(true);
+        return;
+      }
+      w.events.length = 0;
+    }
+    throw new Error('the clam never opened');
+  });
+
+  it('runs the rest of the cycle on the tick counts the view animates against', () => {
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
     w.hitClam(c);
     w.events.length = 0;
 
-    // the pearl waits for the lid to actually come off
-    steps(w, SIM.CLAM_SPILL_TICKS - 1);
-    expect(only(w.events, 'pearlReleased')).toHaveLength(0);
-    steps(w, 1);
-    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
-
-    // …then flies to the counter, and only THEN is it counted
-    steps(w, COLLECT_AT - SIM.CLAM_SPILL_TICKS - 1);
+    // the pearl flies to the counter, and only on arrival is it counted
+    steps(w, COLLECT_AT - 1);
     expect(only(w.events, 'pearlCollected')).toHaveLength(0);
     steps(w, 1);
     expect(only(w.events, 'pearlCollected')).toHaveLength(1);
@@ -173,12 +202,52 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(only(w.events, 'clamClosed')).toEqual([{ type: 'clamClosed', id: c.id }]);
   });
 
-  it('the spill tick matches the rig\'s authored react + bump length', () => {
-    // `bump-inactive` (0.267s) + `bump` (0.30s): the point at which the oyster
-    // has genuinely removed its lid. Spilling earlier puts the pearl on top of a
-    // closed shell. The view animates straight off SIM, so if this drifts the
-    // pearl visibly sprouts from an unopened clam.
-    expect(SIM.CLAM_SPILL_TICKS * SIM.DT).toBeCloseTo(0.567, 2);
+  it('the cycle outlasts the rig\'s 0.30s opening plus a beat of idle', () => {
+    // `bump` re-attaches the lid for most of its run and strips it at 0.30s. If
+    // the shell shut before that finished, the clam would snap back to dormant
+    // mid-open and the opening would never be seen.
+    expect(SIM.CLAM_CYCLE_TICKS * SIM.DT).toBeGreaterThan(0.30);
+    // and the pearl must be collected before the shell shuts under it
+    expect(SIM.PEARL_FLIGHT_TICKS).toBeLessThan(SIM.CLAM_CYCLE_TICKS);
+  });
+
+  it('flings a duck far harder than a barrel would', () => {
+    // the oyster is the game's pinball bumper, not a wall: a head-on slam comes
+    // back near the speed it arrived, where RESTITUTION_STATIC would halve it
+    const w = new World(1);
+    const c = w.spawnClam(CLAM.x, CLAM.y);
+    const d = w.spawnDuck('red', CLAM.x - TOUCH - 4, CLAM.y);
+    d.vx = 1200;
+    w.events.length = 0;
+
+    expect(stepUntil(w, 'bumperHit', 30)).toBeGreaterThanOrEqual(0);
+
+    expect(d.vx).toBeLessThan(0);                                  // came back
+    expect(Math.abs(d.vx)).toBeGreaterThan(1200 * SIM.RESTITUTION_STATIC);
+    expect(Math.abs(d.vx)).toBeGreaterThan(SIM.CLAM_KICK);
+    expect(Math.hypot(d.vx, d.vy)).toBeLessThanOrEqual(SIM.MAX_SPEED);
+  });
+
+  it('the fling never lets a duck escape the speed cap', () => {
+    const w = new World(1);
+    const c = w.spawnClam(CLAM.x, CLAM.y);
+    const d = w.spawnDuck('red', CLAM.x - TOUCH - 4, CLAM.y);
+    d.vx = SIM.MAX_SPEED;
+    w.events.length = 0;
+    expect(stepUntil(w, 'bumperHit', 30)).toBeGreaterThanOrEqual(0);
+    expect(Math.hypot(d.vx, d.vy)).toBeLessThanOrEqual(SIM.MAX_SPEED + 1e-6);
+  });
+
+  it('a raised kick does not change what counts as a hard enough hit', () => {
+    // the trigger reads the PRE-fling approach speed, so CLAM_KICK is purely a
+    // feel knob and cannot quietly widen the crack threshold
+    const w = new World(1);
+    const c = w.spawnClam(CLAM.x, CLAM.y);
+    const d = w.spawnDuck('red', CLAM.x - TOUCH - 8, CLAM.y);
+    d.vx = SIM.CLAM_HIT_SPEED - 20;
+    w.events.length = 0;
+    expect(stepUntil(w, 'bumperHit', 40)).toBeGreaterThanOrEqual(0);
+    expect(c.open).toBe(false);
   });
 
   it('re-arms after the cycle and yields a SECOND pearl when hit again', () => {
@@ -199,16 +268,18 @@ describe('clam — a solid bumper that dispenses pearls', () => {
   it('spills exactly ONE pearl however many things hit it in one cycle', () => {
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
-    w.hitClam(c);
+    // cleared BEFORE the opening hit: the spill is now part of that same impact,
+    // so clearing afterwards would throw away the very release being counted
     w.events.length = 0;
 
+    w.hitClam(c);                                        // the one that lands
     w.hitClam(c);                                        // direct re-trigger
     w.popDuck(w.spawnDuck('green', CLAM.x, CLAM.y + 60)); // blast on top of it
     const d = w.spawnDuck('red', LANE_X, CLAM.y);
     w.launch(d.id, SIM.LAUNCH_SPEED, 0);                 // and a full-speed slam
     steps(w, SIM.CLAM_CYCLE_TICKS - 1);
 
-    expect(only(w.events, 'clamOpened')).toHaveLength(0);
+    expect(only(w.events, 'clamOpened')).toHaveLength(1);
     expect(only(w.events, 'pearlReleased')).toHaveLength(1);
     expect(only(w.events, 'pearlCollected')).toHaveLength(1);
   });

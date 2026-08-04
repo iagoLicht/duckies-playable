@@ -857,33 +857,37 @@ export class GameScene {
   }
 
   /**
-   * The crack-open beat, all of it the rig's own authored animation:
-   *   `bump-inactive` (0.27s) — the react. Same shut attachment set, the
-   *      `oyster` bone squashed: it jolts but stays closed.
-   *   `bump` (0.30s) — the opening. It re-attaches the `face-up` lid at t=0,
-   *      fades it to 0.34 alpha and REMOVES it (and `mouth-bottom`) at 0.30,
-   *      bringing eye/eye2 back at 0.27. Net: the lid comes off, eyes pop.
+   * The crack-open beat, starting on the IMPACT FRAME — the same tick the duck
+   * is flung away and the pearl is released. All the rig's own animation:
+   *   `bump` (0.30s) — the opening, and its own squash on the oyster/mouth/eye
+   *      bones. It re-attaches the `face-up` lid at t=0, fades it to 0.34 alpha
+   *      and REMOVES it (and `mouth-bottom`) at 0.30, bringing eye/eye2 back at
+   *      0.27. Net: the shell jolts, the lid comes off, the eyes pop.
    *   `idle` (loop) — the awake shell breathing.
    *
-   * `bump` only touches those four slots, so coming straight out of the shut
-   * set it would leave the closed-shell overlay and the dormant eyes stranded
-   * on top of the opening. The setup pose IS the awake set (face-up and
-   * mouth-bottom detached, eye/eye2 attached, no overlay), so each one-shot
-   * hands over through a setSlotsToSetupPose() on its `complete` — before the
-   * next animation is applied, since AnimationState drains its event queue
-   * inside update() and the skeleton is only posed afterwards, in apply().
-   * The same call on `bump`'s completion is the belt-and-braces guarantee that
-   * the lid is gone even if the final attachment frame never lands.
+   * `bump-inactive` (0.27s) used to run FIRST as a react beat — the shut
+   * attachment set with the `oyster` bone squashed, authored as "it jolts but
+   * stays closed". It is by definition a stall before the opening, and with the
+   * pearl waiting on it too the hit read as four staggered beats rather than one
+   * impact. Dropped from this path (it still serves as the closing beat, where a
+   * shut-pose squash is exactly right). The movement itself is not lost: `bump`
+   * carries its own squash.
+   *
+   * `bump` only touches those four slots, so coming straight out of the shut set
+   * it would leave the closed-shell overlay and the dormant eyes stranded on top
+   * of the opening. The setup pose IS the awake set (face-up and mouth-bottom
+   * detached, eye/eye2 attached, no overlay), so the one-shot hands over through
+   * a setSlotsToSetupPose() on its `start` — before the animation is applied,
+   * since AnimationState drains its event queue inside update() and the skeleton
+   * is only posed afterwards, in apply(). The same call on `complete` is the
+   * belt-and-braces guarantee that the lid is gone even if the final attachment
+   * frame never lands.
    */
   private openClamView(id: number): void {
     const v = this.clamViews.get(id);
     if (!v) return;
     const wake = (): void => v.skeleton.setSlotsToSetupPose();
-    v.state.setAnimation(CT_SHELL, 'bump-inactive', false);
-    // on `start`, not on the previous clip's `complete`: handing over a frame
-    // early showed the awake set for a single frame before `bump` re-applied
-    // its own attachment keys, which reads as a flicker
-    v.state.addAnimation(CT_SHELL, 'bump', false, 0).listener = { start: wake, complete: wake };
+    v.state.setAnimation(CT_SHELL, 'bump', false).listener = { start: wake, complete: wake };
     v.state.addAnimation(CT_SHELL, 'idle', true, 0);
   }
 

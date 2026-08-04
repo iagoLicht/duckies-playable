@@ -11,23 +11,38 @@ export const SIM = {
   /** min approach speed for a duck to crack a clam (same bar as a match pop) */
   CLAM_HIT_SPEED: 126,
 
-  // ── the clam's open→spill→collect→shut cycle. A clam is a REPEATABLE pearl
+  // ── the clam's open→collect→shut cycle. A clam is a REPEATABLE pearl
   // dispenser, not a one-shot goal: it opens, spills one pearl, the pearl flies
   // to the HUD and decrements the counter, then the shell shuts and re-arms.
   // Every number here is a tick count so the sim owns the whole sequence and the
   // view can animate straight off it — nothing is timed twice in two places.
   //
-  // CLAM_SPILL_TICKS matches the view's authored open beat exactly:
-  // `bump-inactive` (0.267s) + `bump` (0.30s) = 0.567s, the point at which the
-  // rig has genuinely removed the lid. Spilling earlier puts the pearl on top of
-  // a closed shell.
-  CLAM_SPILL_TICKS: 34,          // 0.567s — react + bump, then the pearl emerges
-  /** pearl's flight from the shell to the HUD counter */
+  // THE IMPACT IS ONE FRAME. The fling, the shell's squash, the opening and the
+  // pearl all begin on the contact tick — there is deliberately no spill delay.
+  // (There used to be: the view played `bump-inactive` as a 0.267s "it jolts but
+  // stays shut" react before `bump`, and the pearl waited out both. That read as
+  // four separate beats instead of one hit. `bump` carries its own squash on the
+  // oyster/mouth/eye bones, so dropping the pre-beat keeps the movement and only
+  // removes the stall.) Trade-off, deliberate: `bump` re-attaches the lid for
+  // most of its 0.30s run and strips it at the very end, so for ~0.2s the pearl
+  // is rising over a shell that still looks shut.
+  /** pearl's flight from the shell to the HUD counter, timed from IMPACT */
   PEARL_FLIGHT_TICKS: 42,        // 0.70s
-  /** the whole cycle: spill + flight + a beat open before the shell shuts */
-  CLAM_CYCLE_TICKS: 90,          // 1.50s
+  /** impact → shell shut and armed again. Must outlast `bump` (0.30s) plus a
+   *  readable beat of `idle`, and the pearl is collected at 42 en route. */
+  CLAM_CYCLE_TICKS: 60,          // 1.00s
   /** one physical collision opens a clam once (mirrors BARREL_HIT_COOLDOWN_TICKS) */
   CLAM_HIT_COOLDOWN_TICKS: 12,
+
+  // The oyster IS the game's bumper ("GameEntityBumper renders as this oyster…
+  // Adds pinball deflection juice", asset manifest), so it flings like the wall
+  // bumpers rather than reflecting at half energy the way a barrel does. Same
+  // formula as WALL/BUMPER above — a fixed outgoing normal speed plus a share of
+  // the incoming — but deliberately punchier than the pink wall tips: a
+  // full-speed slam comes back at nearly the speed it arrived, and even a slow
+  // roll is thrown clear. This is a FEEL knob; turn these two, not the geometry.
+  CLAM_KICK: 600,                // fixed part of the outgoing normal speed…
+  CLAM_KEEP: 0.7,                // …plus this share of the incoming speed
 
   // ── movement, from the official example verbatim (decomp xr, at 90 px/unit).
   // Drag is v *= 1/(1 + DRAG·dt) per fixed step, banded: a fresh shot flies
