@@ -115,9 +115,8 @@ export const FIELD = { x0: 46, y0: 220, x1: 674, y1: 1234, bumperY: 950 } as con
  *  - BARRELS ARE SOFT, so hp is a weak knob in both directions: a launched duck
  *    ricochets and re-hits, and dropping an hp2 to hp1 typically buys under a
  *    shot. Useful, rarely sufficient on its own.
- *  - CLAMS ARE THE DIFFICULTY CURRENCY. They need a direct hit above
- *    CLAM_HIT_SPEED or a blast centred within 135, and neither happens by
- *    accident.
+ *  - CLAMS ARE THE DIFFICULTY CURRENCY. They need a duck to actually reach the
+ *    shell, or a blast centred within 135, and neither happens by accident.
  *  - WHAT ACTUALLY COSTS SHOTS IS DISTANCE AND SHADOW, not hit points. Goals
  *    strung far apart, or parked under a clam that roofs them, are paid for one
  *    at a time. The strongest single fix is to move goals into each other's

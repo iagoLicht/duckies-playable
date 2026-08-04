@@ -9,9 +9,10 @@ import type { SimEvent } from '../../src/sim/types';
  * The clam (the pack's oyster rig) is a repeatable PEARL DISPENSER. Rules:
  *   1. it is ALWAYS solid — shut, open or spent it bounces ducks, because the
  *      rig is the game's bumper, and that deflection is level geometry;
- *   2. a hard duck hit (approach speed over CLAM_HIT_SPEED) or any blast within
- *      BLAST_R starts ONE cycle: open -> spill one pearl -> pearl reaches the
- *      HUD -> shell shuts and re-arms;
+ *   2. ANY duck contact with an armed shell, or any blast within BLAST_R,
+ *      starts ONE cycle: open -> spill one pearl -> pearl reaches the HUD ->
+ *      shell shuts and re-arms. Direction and strength do not gate the payout:
+ *      if the shell reacted, it pays;
  *   3. exactly one pearl per cycle, however many things hit it meanwhile;
  *   4. once the level's quota is met the Director spends every clam: still
  *      solid, still visible, permanently inert.
@@ -46,22 +47,22 @@ const only = (evs: SimEvent[], type: SimEvent['type']): SimEvent[] =>
   evs.filter((e) => e.type === type);
 
 describe('clam — a solid bumper that dispenses pearls', () => {
-  it('a shut clam bounces a slow duck back and stays shut', () => {
+  it('a SLOW duck bounces back and still spills its pearl', () => {
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
-    // parked 8px outside contact so the approach speed at impact is still the
-    // one we set — comfortably under CLAM_HIT_SPEED, comfortably over STOP_SPEED
+    // parked 8px outside contact so the approach speed at impact is the one we
+    // set: a feeble 100 px/s, which used to be under the crack threshold and
+    // bounced off a shell that visibly reacted and paid nothing
     const d = w.spawnDuck('red', CLAM.x - TOUCH - 8, CLAM.y);
     d.vx = 100;
-    expect(SIM.CLAM_HIT_SPEED).toBeGreaterThan(100);
     w.events.length = 0;
 
     expect(stepUntil(w, 'bumperHit', 30)).toBeGreaterThanOrEqual(0);
 
-    expect(c.open).toBe(false);
-    expect(only(w.events, 'clamOpened')).toHaveLength(0);
-    expect(only(w.events, 'pearlReleased')).toHaveLength(0);
-    // it really did make contact, and it really did come back
+    expect(c.open).toBe(true);
+    expect(only(w.events, 'clamOpened')).toHaveLength(1);
+    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
+    // and it still bounces: the deflection is level geometry, untouched
     expect(only(w.events, 'bumperHit').length).toBeGreaterThan(0);
     expect(d.vx).toBeLessThan(0);
     expect(Math.hypot(d.x - c.x, d.y - c.y)).toBeGreaterThanOrEqual(TOUCH - 1e-6);
@@ -90,11 +91,14 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     ]);
   });
 
-  it('the crack threshold is the APPROACH speed, not the raw speed', () => {
-    // A duck sliding past the clam's face at 900 px/s — seven times the crack
-    // threshold — but grazing it: the lane is half a pixel inside contact range,
-    // so the deepest possible normal component is ~68 px/s however the substeps
-    // land. It bounces, it does not open.
+  it('a GLANCING hit spills its pearl — direction does not gate the payout', () => {
+    // The regression test for the reported bug. A duck slides past the clam's
+    // face at 900 px/s but only grazes it: the lane is half a pixel inside
+    // contact range, so the deepest normal component is ~68 px/s however the
+    // substeps land. That is the shape of every "it reacted but nothing came
+    // out" report — fast duck, shallow normal. It bounced and stayed shut
+    // because the payout was gated on the NORMAL component while the react was
+    // not. One contact, one pearl.
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
     const d = w.spawnDuck('red', LANE_X, CLAM.y - (TOUCH - 0.5));
@@ -103,8 +107,8 @@ describe('clam — a solid bumper that dispenses pearls', () => {
 
     expect(stepUntil(w, 'bumperHit', 40)).toBeGreaterThanOrEqual(0);
 
-    expect(Math.hypot(d.vx, d.vy)).toBeGreaterThan(SIM.CLAM_HIT_SPEED * 3);
-    expect(c.open).toBe(false);
+    expect(c.open).toBe(true);
+    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
   });
 
   it('a blast inside BLAST_R opens it', () => {
@@ -238,16 +242,19 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(Math.hypot(d.vx, d.vy)).toBeLessThanOrEqual(SIM.MAX_SPEED + 1e-6);
   });
 
-  it('a raised kick does not change what counts as a hard enough hit', () => {
-    // the trigger reads the PRE-fling approach speed, so CLAM_KICK is purely a
-    // feel knob and cannot quietly widen the crack threshold
-    const w = new World(1);
-    const c = w.spawnClam(CLAM.x, CLAM.y);
-    const d = w.spawnDuck('red', CLAM.x - TOUCH - 8, CLAM.y);
-    d.vx = SIM.CLAM_HIT_SPEED - 20;
-    w.events.length = 0;
-    expect(stepUntil(w, 'bumperHit', 40)).toBeGreaterThanOrEqual(0);
-    expect(c.open).toBe(false);
+  it('every approach speed yields exactly one pearl, never zero and never two', () => {
+    // sweeps the whole range the old threshold cut across, plus a crawl and a
+    // slam either side of it: the payout is one per contact throughout
+    for (const speed of [80, 106, 126, 146, 400, 1200]) {
+      const w = new World(1);
+      const c = w.spawnClam(CLAM.x, CLAM.y);
+      const d = w.spawnDuck('red', CLAM.x - TOUCH - 8, CLAM.y);
+      d.vx = speed;
+      w.events.length = 0;
+      expect(stepUntil(w, 'bumperHit', 60), `speed ${speed}`).toBeGreaterThanOrEqual(0);
+      expect(c.open, `speed ${speed}`).toBe(true);
+      expect(only(w.events, 'pearlReleased'), `speed ${speed}`).toHaveLength(1);
+    }
   });
 
   it('re-arms after the cycle and yields a SECOND pearl when hit again', () => {

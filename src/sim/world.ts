@@ -387,12 +387,24 @@ export class World {
             d.vy *= f;
           }
           this.events.push({ type: 'bumperHit', id: c.id, x: d.x, y: d.y });
-        }
-        // the trigger reads the PRE-fling approach speed, so raising the kick
-        // cannot accidentally change what counts as a hard enough hit
-        if (vn < -SIM.CLAM_HIT_SPEED && c.hitCooldown === 0 && c.active && !c.open) {
-          c.hitCooldown = SIM.CLAM_HIT_COOLDOWN_TICKS;
-          this.hitClam(c);
+          // ONE CONTACT, ONE PEARL. The shell reacting and the shell paying out
+          // are the same event, so they are decided by the same test — this sits
+          // inside the react rather than beside it.
+          //
+          // It used to sit outside, gated on vn < -CLAM_HIT_SPEED while the
+          // react only needed vn < 0. Two bars for one contact, and `vn` is the
+          // NORMAL component: a duck arriving hard but glancing, or catching the
+          // shell from behind, carries most of its speed tangentially and clears
+          // the first bar while missing the second. The shell visibly reacted
+          // and no pearl came out. Direction and strength decided the payout
+          // when only "did it touch an armed shell" ever should have.
+          //
+          // What still refuses is unchanged and deliberate: a shell mid-cycle
+          // (one pearl per cycle) or spent (quota met). Neither is a valid hit.
+          if (c.hitCooldown === 0 && c.active && !c.open) {
+            c.hitCooldown = SIM.CLAM_HIT_COOLDOWN_TICKS;
+            this.hitClam(c);
+          }
         }
       }
     }

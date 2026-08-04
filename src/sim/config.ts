@@ -8,8 +8,6 @@ export const SIM = {
   BARREL_R: 60,
   /** the oyster rig is 126x155; this is its solid bumper radius at scene scale */
   CLAM_R: 56,
-  /** min approach speed for a duck to crack a clam (same bar as a match pop) */
-  CLAM_HIT_SPEED: 126,
 
   // ── the clam's open→collect→shut cycle. A clam is a REPEATABLE pearl
   // dispenser, not a one-shot goal: it opens, spills one pearl, the pearl flies
