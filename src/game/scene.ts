@@ -547,7 +547,18 @@ export class GameScene {
   /** in-flight pearls by clam id; `pearlCollected` lands the matching one */
   private pearlFlights = new Map<number, () => void>();
 
-  constructor(private app: Application, private seed: number, startLevel = 0) {
+  /**
+   * The scaled-down container everything is drawn into. The scene never reads
+   * its transform: it lays out in design space exactly as before, and `root`
+   * shrinks the result. The one place the transform matters is input, which has
+   * to be converted into this space rather than the stage's.
+   */
+  constructor(
+    private app: Application,
+    private root: Container,
+    private seed: number,
+    startLevel = 0,
+  ) {
     // clamped so a stray ?level= can never ask the Director for a level that
     // does not exist (it throws) — the campaign just starts at the last one
     const i = Math.min(Math.max(0, startLevel), LEVELS.length - 1);
@@ -592,7 +603,7 @@ export class GameScene {
     this.crescent.visible = false;
     this.aimUnder.addChild(this.aimLine, this.crescent);
     this.trailTex = await loadTexture(trailUrl);
-    this.app.stage.addChild(this.aimUnder, this.trailLayer, this.layer, this.fx, this.hud);
+    this.root.addChild(this.aimUnder, this.trailLayer, this.layer, this.fx, this.hud);
     await this.buildHud();
 
     // The rig's `active-ring` and `aim` skins ship ZERO attachments — they exist
@@ -633,6 +644,9 @@ export class GameScene {
   }
 
   private wireInput(): void {
+    // The stage stays the event surface — it covers the whole canvas, so a drag
+    // that wanders into the margin outside the board still tracks. Positions are
+    // then converted into `root`, which is the space the sim thinks in.
     const stage = this.app.stage;
     stage.eventMode = 'static';
     stage.hitArea = { contains: () => true };
@@ -643,7 +657,7 @@ export class GameScene {
       // sees a grab, so no launch can slip past and drive movesLeft negative
       const d = this.director;
       if (d.movesLeft === 0 || d.won || d.failed) return;
-      const p = e.getLocalPosition(stage);
+      const p = e.getLocalPosition(this.root);
       if (!d.slingshot.begin(p.x, p.y)) return;
       // a duck waiting in the spawn queue has no view yet: refuse the grab
       // rather than let the player sling an invisible duck
@@ -657,7 +671,7 @@ export class GameScene {
     });
     stage.on('pointermove', (e) => {
       if (e.pointerId !== this.activePointer) return;
-      const p = e.getLocalPosition(stage);
+      const p = e.getLocalPosition(this.root);
       this.director.slingshot.move(p.x, p.y);
     });
     const up = (e: { pointerId: number }): void => {
@@ -754,9 +768,12 @@ export class GameScene {
       this.app.stage.position.set(0, 0);
       return;
     }
+    // amplitude rides the view scale, so the shake stays the same fraction of
+    // the board however big the board is drawn
+    const k = this.root.scale.x;
     this.app.stage.position.set(
-      (Math.random() * 2 - 1) * SHAKE_INTENSITY * DESIGN_W,
-      (Math.random() * 2 - 1) * SHAKE_INTENSITY * DESIGN_H,
+      (Math.random() * 2 - 1) * SHAKE_INTENSITY * DESIGN_W * k,
+      (Math.random() * 2 - 1) * SHAKE_INTENSITY * DESIGN_H * k,
     );
   }
 
