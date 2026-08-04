@@ -190,23 +190,35 @@ const CRESCENT_SCALE = 0.55; // 60px-tall pill -> ~33px
  */
 const AIM_BONE = 'a_target';
 /**
- * `turn`'s turntable driver, and the one bone that makes the facing and the
- * sling fight each other: the chain is `a_target < all < master < body`, so
- * `all` sits BETWEEN the aim root and the duck. Rotating the sling toward the
- * shot rotates `all` with it (that is what carries the recoil round), but
- * `turn` ALSO rotates `all`, 0 -> 360 over its 12s — and that rotation lands on
- * the aim frame, swinging the teardrop away from the shot and throwing the
- * recoil off by the facing angle. Measured: pull down with `turn` pinned at
- * t=3 and the teardrop points left instead of up.
+ * `turn`'s turntable drivers, and what makes the facing and the sling fight.
  *
- * So the facing's rotation is stripped off this bone every frame, in the same
+ * AIM_BONE has two sub-assemblies hanging off it, each with its own root:
+ *
+ *   a_target > all  > master > body …          the duck
+ *   a_target > AcIRCLES > all2 > … > active-ring3   the aim teardrop
+ *
+ * Rotating a_target toward the shot swings both, which is exactly what the
+ * sling should do. But `turn` ALSO rotates both roots, 0 -> 360 over its 12s
+ * (a 2-frame timeline apiece), so the facing angle lands a second time on the
+ * aim frame. Zeroing only `all` fixes the duck and leaves the band behind:
+ * measured, pulling down with the facing on put the duck art in the right place
+ * (cy 82.0 against 81.7 with the facing off) while the teardrop turned 90° onto
+ * its side — 197x118 where it should have been 118x197 — so the duck sat
+ * outside the band instead of inside its round end.
+ *
+ * So both roots are stripped every frame, in the same
  * beforeUpdateWorldTransforms hook that steers AIM_BONE. Nothing is lost: the
- * duck's actual facing comes from `turn`'s attachment, deform, RGBA and
- * head/body timelines, not from `all`. And nothing else is disturbed — `turn`
- * is the only animation in the rig that rotates `all` (checked against all 34),
- * and its setup rotation is 0.
+ * duck's facing comes from `turn`'s attachment, deform, RGBA and head/body
+ * timelines, not from these two. And nothing else is disturbed — checked
+ * against all 34 animations in the rig, `turn` is the only one that rotates
+ * either, and both have a setup rotation of 0.
+ *
+ * NOT included, deliberately: `active-ring`/`active-ring2`, the circular
+ * selection ring's roots. `turn` spins those too, but so does `spin_ring` — the
+ * slow idle rotation on T_SPIN — and zeroing them would kill it. They sit under
+ * `root` rather than a_target, so the sling never touches them anyway.
  */
-const TURNTABLE_BONE = 'all';
+const TURNTABLE_BONES = ['all', 'all2'];
 /** drag distance (px) that maps to the aim anim's full stretch */
 const AIM_PULL_FULL = 260;
 /** even the shortest valid pull shows some stretch (reference: s044 small oval) */
@@ -900,13 +912,13 @@ export class GameScene {
     // steer the aim teardrop after the animation is applied, before the world
     // transforms bake — the supported spine hook for per-frame bone overrides
     const bone = s.skeleton.findBone(AIM_BONE);
-    const spin = s.skeleton.findBone(TURNTABLE_BONE);
-    if (bone || spin) {
+    const turntables = TURNTABLE_BONES.map((n) => s.skeleton.findBone(n)).filter((b) => b !== null);
+    if (bone || turntables.length) {
       const id = d.id;
       s.beforeUpdateWorldTransforms = () => {
-        // `turn` is the ONLY animation in the rig that rotates `all`, and its
+        // `turn` is the only animation in the rig that rotates these, and their
         // setup value is 0, so putting it back costs nothing anywhere else.
-        if (spin) spin.rotation = 0;
+        for (const t of turntables) t.rotation = 0;
         const rot = this.aimBoneRot.get(id);
         if (rot !== undefined && bone) bone.rotation = rot;
       };
