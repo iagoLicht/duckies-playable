@@ -176,3 +176,82 @@ describe('World motion', () => {
     expect(barrel.hp).toBe(2);
   });
 });
+
+/**
+ * duck-duck contact was the only collision routine in world.ts that reported
+ * nothing, which is why the game's most common interaction had no sound and no
+ * spray. These pin the event's shape and — the load-bearing one — the claim that
+ * it needs no cooldown state.
+ */
+describe('duckBumped', () => {
+  it('a different-colour bounce reports a bump and no match', () => {
+    const w = mk();
+    const a = w.spawnDuck('red', 300, 700);
+    w.spawnDuck('green', 460, 700);
+    w.launch(a.id, 900, 0);
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
+    expect(w.events.filter((e) => e.type === 'duckBumped').length).toBeGreaterThan(0);
+    expect(w.events.filter((e) => e.type === 'duckMatched')).toHaveLength(0);
+  });
+
+  it('on a same-colour hit the bump lands BEFORE the match', () => {
+    const w = mk();
+    const a = w.spawnDuck('red', 300, 700);
+    w.spawnDuck('red', 460, 700);
+    w.launch(a.id, 1600, 0);
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
+    const bump = w.events.findIndex((e) => e.type === 'duckBumped');
+    const match = w.events.findIndex((e) => e.type === 'duckMatched');
+    expect(bump).toBeGreaterThanOrEqual(0);
+    expect(match).toBeGreaterThanOrEqual(0);
+    expect(bump).toBeLessThan(match);
+  });
+
+  it('reports the PRE-impulse approach speed, not the post-bounce one', () => {
+    const w = mk();
+    const a = w.spawnDuck('red', 300, 700);
+    w.spawnDuck('green', 393, 700); // one step from touching at 92px apart
+    a.vx = 900;
+    a.live = true;
+    w.step(SIM.DT);
+    const e = w.events.find((k) => k.type === 'duckBumped');
+    expect(e).toBeDefined();
+    // drag shaves a little off 900 before the substeps run; the point is that it
+    // is the approach speed and nowhere near the RESTITUTION_BODY exit
+    expect(e!.speed).toBeGreaterThan(850);
+    expect(e!.speed).toBeLessThanOrEqual(900);
+  });
+
+  it('a settled cluster in mutual contact emits NOTHING across 120 steps', () => {
+    // The whole no-cooldown argument: the impulse only runs on rel < 0 and
+    // leaves the pair separating, so one physical collision cannot re-fire
+    // across the 2-16 adaptive substeps. Without that this would be roughly
+    // 960 events/second per touching pair.
+    const w = mk();
+    const r = SIM.DUCK_R * 2 - 2; // deliberately overlapping, as a real cluster is
+    w.spawnDuck('red', 360, 700);
+    w.spawnDuck('green', 360 + r, 700);
+    w.spawnDuck('purple', 360 + r / 2, 700 + r * 0.87);
+    w.spawnDuck('yellow', 360 - r / 2, 700 + r * 0.87);
+    for (let i = 0; i < 120; i++) w.step(SIM.DT);
+    expect(w.events.filter((e) => e.type === 'duckBumped')).toHaveLength(0);
+  });
+
+  it('is deterministic: the same seed gives the same bump sequence', () => {
+    const run = (): string => {
+      const w = new World(7);
+      const a = w.spawnDuck('red', 300, 700);
+      w.spawnDuck('green', 470, 660);
+      w.spawnDuck('purple', 520, 780);
+      w.launch(a.id, 1400, 120);
+      for (let i = 0; i < 180; i++) w.step(SIM.DT);
+      return w.events
+        .filter((e) => e.type === 'duckBumped')
+        .map((e) => `${e.a}-${e.b}@${e.speed.toFixed(6)}`)
+        .join('|');
+    };
+    const first = run();
+    expect(first.length).toBeGreaterThan(0);
+    expect(run()).toBe(first);
+  });
+});

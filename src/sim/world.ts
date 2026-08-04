@@ -279,6 +279,20 @@ export class World {
           const imp = (-(1 + SIM.RESTITUTION_BODY) * rel) / 2;
           a.vx -= imp * nx; a.vy -= imp * ny;
           b.vx += imp * nx; b.vy += imp * ny;
+          // Report the contact. NO cooldown state here, unlike the barrels and
+          // clams, because the impulse above is self-debouncing: it only runs on
+          // rel < 0 and leaves rel = -RESTITUTION_BODY·rel > 0, i.e. separating,
+          // so the next substep cannot re-fire on the same physical collision.
+          // A third body shoving the pair back together does produce rel < 0
+          // again, and that IS a new collision. BUMP_MIN_SPEED then only has to
+          // reject settling jitter. (Asserted, not trusted — see the substep-spam
+          // test in tests/sim/world.test.ts.)
+          if (-rel >= SIM.BUMP_MIN_SPEED) {
+            this.events.push({
+              type: 'duckBumped', a: a.id, b: b.id,
+              x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, speed: -rel,
+            });
+          }
         }
         this.onDuckContact(a, b, Math.abs(rel));
       }

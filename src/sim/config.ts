@@ -82,6 +82,23 @@ export const SIM = {
   // the fuse runs out. Each blast relights a fresh fuse on the ducks it catches,
   // so a chain costs one full fuse per generation.
   POP_SPEED: 126,       // min relative speed for a same-colour pair to match
+  /**
+   * Floor on the closing speed a duck-duck contact needs to report `duckBumped`.
+   *
+   * MEASURED, and the measurement's headline is a NEGATIVE result. The design
+   * expected a bimodal histogram — settling jitter down near zero, real hits far
+   * above — and a threshold placed in the trough. Instrumenting the bot over all
+   * 10 levels x 15 seeds with the gate wide open gives 4149 contacts whose |rel|
+   * is smooth and single-peaked (log2 mode at 1024..2048 px/s), with only
+   * 13 events (0.31%) under 20 px/s and 3 under 1 px/s. There is no jitter
+   * population, i.e. the impulse in collideDuckPairs really is self-debouncing
+   * and no per-pair cooldown is needed. So there is no trough to sit in, and the
+   * threshold is instead anchored to an existing constant: a contact closing
+   * slower than the speed at which the sim halts a duck outright cannot read as
+   * a bounce. Rejects 31/4149 = 0.75% of contacts (just under the measured p1 of
+   * 43.6). Reproduce with shots/bump-histogram.mjs.
+   */
+  BUMP_MIN_SPEED: 38.2, // == STOP_SPEED
   BARREL_HIT_SPEED: 90, // min approach speed for a direct hit to damage a barrel
   BARREL_HIT_COOLDOWN_TICKS: 12, // one physical collision counts once (0.2s)
   BLAST_R: 135,

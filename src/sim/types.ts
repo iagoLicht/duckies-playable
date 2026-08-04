@@ -70,6 +70,14 @@ export type SimEvent =
   /** (x,y) is the contact point, (nx,ny) the outward normal, speed pre-kick */
   | { type: 'wallHit'; id: number; x: number; y: number; nx: number; ny: number;
       speed: number; source: 'wall' | 'bumper' }
+  /**
+   * Duck-duck contact — the game's most common interaction, and until now the
+   * only collision routine in world.ts that reported nothing (walls emit
+   * `wallHit`, clams `bumperHit`, barrels `barrelDamaged`). `a`/`b` are the ids
+   * in collision order, (x,y) the contact midpoint, `speed` the PRE-impulse
+   * relative approach speed so the view can scale volume and fx by impact force.
+   */
+  | { type: 'duckBumped'; a: number; b: number; x: number; y: number; speed: number }
   | { type: 'duckMatched'; id: number }
   | { type: 'duckPopped'; id: number; colour: Colour; x: number; y: number }
   | { type: 'blast'; colour: Colour; x: number; y: number; r: number }

@@ -239,6 +239,12 @@ async function boot(): Promise<void> {
   if (import.meta.env.DEV) {
     (window as unknown as { __scene?: GameScene }).__scene = scene;
   }
+  // The sound layer has no pixels, so the only way to verify it in a browser is
+  // to read its own counters. DEV-only, like __scene: statically dropped from the
+  // shipped file. See shots/audio-probe.mjs.
+  if (import.meta.env.DEV) {
+    (window as unknown as { __audio?: typeof scene.audio }).__audio = scene.audio;
+  }
 }
 
 boot().catch((e: unknown) => {

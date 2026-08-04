@@ -8,6 +8,7 @@ import { SIM } from '../sim/config';
 import type { AimPreview } from '../sim/trajectory';
 import type { Barrel, Clam, Colour, Duck, SimEvent } from '../sim/types';
 import { loadSkeleton, makeSpine } from '../engine/spineLoader';
+import { Audio, impactGain } from './audio';
 
 import duckySkelUrl from '../assets/entities/ducky/ducky.skel';
 import duckyAtlasText from '../assets/entities/ducky/ducky.atlas?raw';
@@ -591,6 +592,9 @@ export class GameScene {
   private timerTrack = { x: 0, y: 0, w: 0, h: 0 };
   private clockHand = new Graphics();
   private timerText!: Text;
+  /** the sound layer. Built once and NEVER rebuilt, so a mute survives a level
+   *  swap and the decoded buffers are paid for exactly once per session. */
+  readonly audio = new Audio();
 
   constructor(private app: Application, private seed: number, startLevel = 0) {
     // clamped so a stray ?level= can never ask the Director for a level that
@@ -682,6 +686,11 @@ export class GameScene {
     stage.eventMode = 'static';
     stage.hitArea = { contains: () => true };
     stage.on('pointerdown', (e) => {
+      // FIRST thing on every pointerdown, before any refusal below can return:
+      // browsers only let audio start from inside a user gesture, and in this
+      // game the first gesture IS the first aim grab. Doing it here means the
+      // grab that unlocks the context is also the one that gets to be heard.
+      this.audio.unlock();
       if (this.activePointer !== null) return; // a grab is in flight — ignore extra fingers
       // the move budget is binding: with the last shot spent (or the level
       // already decided) the board is read-only — refuse before the sim ever
@@ -698,6 +707,11 @@ export class GameScene {
         return;
       }
       this.activePointer = e.pointerId;
+      // event map: launch-pull is "grab/pull a floating duck to aim". It fires on
+      // the GRAB, not on the first drag pixel — the grab is the moment the rig
+      // shows its selection ring, and a sound that waited for movement would
+      // leave a tap-and-hold silent.
+      this.audio.play('launchPull');
       if (this.hand) this.hand.visible = false; // tutorial done
     });
     stage.on('pointermove', (e) => {
@@ -708,8 +722,14 @@ export class GameScene {
     const up = (e: { pointerId: number }): void => {
       if (e.pointerId !== this.activePointer) return;
       this.activePointer = null;
-      const held = this.director.slingshot.pull?.duck.id ?? null;
+      const pull = this.director.slingshot.pull;
+      const held = pull?.duck.id ?? null;
+      // a pull that never reached MIN_PULL is a whiff and stays silent; a pull
+      // that DID aim and was still refused (the red X — no duck on the line) is
+      // the case that needs an answer, and gets the nope blip
+      const aimed = (pull?.len ?? 0) >= SIM.MIN_PULL;
       const fired = this.director.slingshot.end();
+      if (aimed && !fired) this.audio.play('uiClick', { gain: 0.7 });
       if (fired && held !== null) {
         // the rig's own release snap-back on the launched duck
         const v = this.duckViews.get(held);
@@ -988,17 +1008,31 @@ export class GameScene {
         // this file already tolerates that
         this.spawnQueue.push(e.duck);
         break;
+      case 'duckLaunched':
+        this.audio.play('launchRelease');
+        break;
+      case 'duckBumped':
+        this.audio.play('duckBump', { gain: impactGain(e.speed) });
+        break;
       case 'duckStopped': {
         // the shot is over: give the body back to the idle loop. Held until now
         // so the duck keeps facing the way it was fired for the whole flight
         // rather than snapping front-on the instant it leaves the sling.
         const v = this.duckViews.get(e.id);
         if (v) this.setTurn(e.id, v, null);
+        this.audio.play('duckSettle');
         break;
       }
       case 'duckMatched': {
         const v = this.duckViews.get(e.id);
         const d = this.director.world.ducks.find((k) => k.id === e.id);
+        // The match sound is for a MATCH — "same-colour match forms (collide +
+        // flag)", per the event map. `blast` also routes through flagMatched to
+        // start its victims blinking, and 15% of all duckMatched are that
+        // (measured); those are not matches, they are chain casualties, and the
+        // explosion that doomed them has already sounded. popOnSettle is exactly
+        // the flag that tells the two apart, and it is set before this drain.
+        if (d && !d.popOnSettle) this.audio.play('duckMatch');
         if (v && d) {
           // official hit(): the rig's own `jump`, then back to idle
           v.state.setAnimation(T_BODY, 'jump', false);
@@ -1027,14 +1061,23 @@ export class GameScene {
         this.popFlash(e.x, e.y, e.colour);
         this.hitstop = HITSTOP;
         this.shake = SHAKE_TIME;
+        this.audio.play('duckExplode');
         break;
       }
       case 'blast':
+        // no sound of its own: `blast` is pushed on the same tick as the
+        // `duckPopped` at the same position, and duck-explode covers both
         this.flashBlast(e.x, e.y, e.r, e.colour);
         break;
       case 'wallHit':
         if (e.source === 'bumper') this.burst(e.x, e.y, 0xffb459, 0.8);
         else this.wallFoam(e.x, e.y, e.nx, e.ny);
+        // the pink wall tips fling harder than the tub wall, so they get the
+        // slightly brighter read; both are the substituted bump sample
+        this.audio.play('wallBump', {
+          gain: impactGain(e.speed) * (e.source === 'bumper' ? 1.25 : 1),
+          rate: e.source === 'bumper' ? 1 : 0.82,
+        });
         break;
       case 'barrelSpawned':
         this.addBarrel(e.barrel);
@@ -1047,6 +1090,7 @@ export class GameScene {
           v.state.setAnimation(1, 'hit', false);
           v.state.addEmptyAnimation(1, 0.1, 0);
         }
+        this.audio.play('crateHit');
         break;
       }
       case 'barrelDestroyed': {
@@ -1073,6 +1117,7 @@ export class GameScene {
           this.app.ticker.add(fade);
         }
         this.crateBreak(e.x, e.y);
+        this.audio.play('crateSmash');
         break;
       }
       case 'clamSpawned':
@@ -1080,6 +1125,7 @@ export class GameScene {
         break;
       case 'clamOpened':
         this.openClamView(e.id);
+        this.audio.play('clamCrack');
         break;
       case 'pearlReleased':
         // no view-side delay any more: the sim spills at CLAM_SPILL_TICKS, which
@@ -1090,6 +1136,10 @@ export class GameScene {
       case 'pearlCollected':
         // the sim says it has arrived — land it NOW, whatever the tween thinks
         this.pearlFlights.get(e.id)?.();
+        // win-whoosh's source file is sfx_ui_pointWhoosh_01.wav — the game's
+        // points-fly-to-the-counter whoosh. A pearl reaching the HUD counter is
+        // exactly that, so this is the clip's own job, not a substitution.
+        this.audio.play('pointWhoosh', { gain: 0.8 });
         break;
       case 'clamClosed':
         this.closeClamView(e.id);
@@ -1108,6 +1158,9 @@ export class GameScene {
       case 'bumperHit':
         // fires on every glancing contact, so it stays to one cheap star
         this.burst(e.x, e.y, CLAM_TINT, 0.5);
+        // the event carries no speed (the fling is a fixed kick), so unlike the
+        // other two tick voices this one cannot be scaled by impact force
+        this.audio.play('clamBump');
         break;
       case 'levelStarted':
         console.log(`level ${e.index + 1}: ${e.name} — ${e.moves} moves`);
@@ -1122,6 +1175,7 @@ export class GameScene {
       case 'levelCleared': {
         console.log(`level ${e.index + 1} CLEARED with ${e.movesLeft} moves to spare`);
         this.celebrate();
+        this.audio.play('pointWhoosh');
         const next = e.index + 1;
         // the campaign rolls straight on; the last level just stays cleared,
         // holding the celebration until an end card exists to take over
@@ -1130,6 +1184,11 @@ export class GameScene {
       }
       case 'levelFailed':
         console.log(`level ${e.index + 1} FAILED — out of moves`);
+        // DELIBERATELY SILENT. The event map lists LoseTitle_Enter but at
+        // priority `nice`, and no fail clip was extracted from the bank — there
+        // is no studio lose sting to play. Pitching some other clip down to fake
+        // one would be inventing a sound the game does not have, so the cold
+        // ring carries the beat on its own.
         this.lament();
         // a miss costs nothing but the retry — same board, fresh budget
         this.after(LEVEL_RETRY_DELAY, () => this.loadLevel(e.index));
@@ -1148,6 +1207,9 @@ export class GameScene {
    * destroying them here would pull the rug out mid-tween.
    */
   loadLevel(index: number): void {
+    // nothing from the old board may bleed over the new one. Safe against the
+    // celebration too: pointWhoosh is 0.39s and the swap is 1.8s behind it.
+    this.audio.stopAll();
     for (const v of this.duckViews.values()) v.destroy();
     for (const v of this.barrelViews.values()) v.destroy();
     for (const v of this.clamViews.values()) v.destroy();
