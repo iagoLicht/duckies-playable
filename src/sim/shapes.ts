@@ -75,7 +75,7 @@ interface Collider {
   mode: 'inside' | 'outside';
 }
 
-export const COLLIDERS: Collider[] = [
+const COLLIDERS: Collider[] = [
   { pts: sampleTub(INSET), closed: true, source: 'wall', mode: 'inside' },
   { pts: LEFT_BUMPER, closed: true, source: 'bumper', mode: 'outside' },
   { pts: RIGHT_BUMPER, closed: true, source: 'bumper', mode: 'outside' },

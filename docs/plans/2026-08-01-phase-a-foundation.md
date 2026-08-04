@@ -1,5 +1,10 @@
 # Phase A: Foundation + Spine Rendering Spike — Implementation Plan
 
+> **HISTORICAL — completed 2026-08-01.** Kept as a record of how the
+> foundation was built. Do not execute; the codebase has moved well past it
+> (see README.md for current state).
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A repo that builds a single self-contained HTML file rendering all four ducky colour skins, the barrel rig, and the firework crate/rockets via spine-pixi-v8 — proving the entire rendering + asset pipeline before any gameplay is written.

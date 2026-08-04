@@ -1,5 +1,10 @@
 # Phase B — Gameplay Simulation Implementation Plan
 
+> **HISTORICAL — completed 2026-08-03.** Kept as a record of how the
+> simulation was built. Do not execute; the single-level design it describes
+> has since been replaced by the ten-level campaign (see README.md).
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the approved static scene into a playable Duckies Pop level: pull-back slingshot ducks, same-colour pair explosions with colour-carrying chain blasts, barrel HP with clasp-strip stages, wave progression with a "x/13" counter, and a rigged "barely win with the final duck" ending — proven by a ~600-run headless playthrough test.
