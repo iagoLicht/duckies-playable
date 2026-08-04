@@ -357,6 +357,14 @@ const HUD_LABEL_SIZE = 18 * REF_K;
  * only ever occupy the top part of it. Measured off the render.
  */
 const HUD_LABEL_BASE = 1.8;
+/**
+ * Black keyline round the labels, so they read against the board as well as the
+ * bar. Canvas centres a stroke on the glyph outline and the fill then paints
+ * over the inner half, so only half of this shows: 4 gives ~2px of visible ink.
+ * That is the game's own weight — measured off its HUD, the keyline runs 3px
+ * against a 19px cap (0.16), and ours is 2.1 against 14.2 (0.15).
+ */
+const HUD_LABEL_STROKE = 4;
 /** the counter number punches this big for a beat whenever it changes */
 const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
 
@@ -1653,6 +1661,7 @@ export class GameScene {
         style: {
           fontFamily: HUD_LABEL_FONT, fontSize: HUD_LABEL_SIZE, fill: 0xffffff, align: 'center',
           letterSpacing: 1.5,
+          stroke: { color: 0x000000, width: HUD_LABEL_STROKE, join: 'round' },
           dropShadow: { color: 0x000000, alpha: 0.25, blur: 0, angle: Math.PI / 2, distance: 2 },
         },
       });
