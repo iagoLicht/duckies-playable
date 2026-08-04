@@ -33,6 +33,14 @@ export class Slingshot {
   private px = 0;
   private py = 0;
 
+  /**
+   * Called the instant a shot actually launches, before anything else can run.
+   * The Director spends the move here rather than when it later drains
+   * `duckLaunched`: a second gesture arriving in the same frame would otherwise
+   * read a budget that had not been debited yet and fire for free.
+   */
+  onLaunch: (() => void) | null = null;
+
   constructor(private world: World) {}
 
   get aiming(): boolean {
@@ -110,6 +118,7 @@ export class Slingshot {
     // red X for exactly the aims this rejects)
     if (predictShot(this.world, duck, dir).hitKind !== 'duck') return false;
     this.world.launch(duck.id, dir.x * SIM.LAUNCH_SPEED, dir.y * SIM.LAUNCH_SPEED);
+    this.onLaunch?.();
     return true;
   }
 

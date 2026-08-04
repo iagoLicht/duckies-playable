@@ -55,6 +55,29 @@ describe('the move budget binds at the sim level', () => {
     expect(d.failed).toBe(true);
   });
 
+  it('two gestures inside one frame cannot both spend the last move', () => {
+    const d = new Director(3, 0);
+    d.start();
+    d.movesLeft = 1;
+
+    // no step() between them: this is the double-fling / queued-pointer case.
+    // The budget used to be debited only when the NEXT step drained the launch
+    // event, so the second gesture read a stale movesLeft and fired for free.
+    let launched = 0;
+    for (let i = 0; i < 4; i++) {
+      const before = d.world.ducks.filter((k) => k.live).length;
+      fireAtAnything(d);
+      if (d.world.ducks.filter((k) => k.live).length > before) launched++;
+    }
+
+    expect(launched).toBeLessThanOrEqual(1);
+    // the shot in flight is counted against the budget immediately, which is
+    // what refuses the second gesture; the debit itself lands on the next step
+    expect(d.slingshot.blocked).toBe(true);
+    d.step(SIM.DT);
+    expect(d.movesLeft).toBe(0);
+  });
+
   it('a blocked slingshot refuses the grab outright', () => {
     const d = new Director(3, 0);
     d.start();

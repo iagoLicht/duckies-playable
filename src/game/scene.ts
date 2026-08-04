@@ -100,6 +100,14 @@ const CT_RIPPLE = 1;
 const CLAM_TINT = 0xFFB0D9;
 /** `bump-inactive`'s authored length — the react beat, before the lid lifts */
 const CLAM_REACT_TIME = 0.27;
+/**
+ * When the shell is ACTUALLY open. `bump` re-attaches the lid and the mouth for
+ * most of its run and only strips them at the very end, so the clam reads shut
+ * until react (0.267s) + bump (0.30s) have both played. Spilling the pearl at
+ * the end of the react beat — which is what this used to do — put it on top of
+ * a closed shell, in the one frame the lid is most firmly on.
+ */
+const CLAM_OPEN_TIME = CLAM_REACT_TIME + 0.3;
 
 // the pearl the shell spills: a quick Back.easeOut pop, a short rise as it
 // fades in, then it hangs there breathing. It clears the shell's top rim
@@ -338,6 +346,9 @@ export class GameScene {
     this.hand.state.setAnimation(0, 'tap', true);
     this.hand.position.set(495, 365);
     this.hand.scale.set(0.25);
+    // only level 1 is being taught — deep-linking to level 7 must not park a
+    // tutorial hand on top of a duck (loadLevel applies the same rule)
+    this.hand.visible = this.director.levelIndex === 0;
     this.fx.addChild(this.hand);
 
     this.app.ticker.add((t) => this.tick(t.deltaMS / 1000));
@@ -635,10 +646,10 @@ export class GameScene {
         break;
       case 'pearlReleased': {
         // the sim spills the pearl on the same tick it cracks the shell; hold it
-        // back through the react beat so it emerges as the lid actually lifts
-        // instead of sprouting out of a still-closed clam
+        // back until the lid is genuinely off so it emerges from an open clam
+        // instead of sprouting out of a closed one
         const { x, y } = e;
-        this.after(CLAM_REACT_TIME, () => this.releasePearl(x, y));
+        this.after(CLAM_OPEN_TIME, () => this.releasePearl(x, y));
         break;
       }
       case 'bumperHit':
@@ -846,9 +857,12 @@ export class GameScene {
   private openClamView(id: number): void {
     const v = this.clamViews.get(id);
     if (!v) return;
-    const awake = { complete: (): void => v.skeleton.setSlotsToSetupPose() };
-    v.state.setAnimation(CT_SHELL, 'bump-inactive', false).listener = awake;
-    v.state.addAnimation(CT_SHELL, 'bump', false, 0).listener = awake;
+    const wake = (): void => v.skeleton.setSlotsToSetupPose();
+    v.state.setAnimation(CT_SHELL, 'bump-inactive', false);
+    // on `start`, not on the previous clip's `complete`: handing over a frame
+    // early showed the awake set for a single frame before `bump` re-applied
+    // its own attachment keys, which reads as a flicker
+    v.state.addAnimation(CT_SHELL, 'bump', false, 0).listener = { start: wake, complete: wake };
     v.state.addAnimation(CT_SHELL, 'idle', true, 0);
   }
 
@@ -870,6 +884,14 @@ export class GameScene {
     let t = 0;
     const anim = (tk: { deltaMS: number }): void => {
       t += tk.deltaMS / 1000;
+      // the pearl bobs for the rest of the level, so unlike the other fx this
+      // one has no natural end — it must stop when its sprite leaves the board
+      // (loadLevel unparents everything in `fx`), or it ticks on for ever
+      if (p.destroyed || p.parent === null) {
+        this.app.ticker.remove(anim);
+        if (!p.destroyed) p.destroy();
+        return;
+      }
       p.scale.set(backOut(Math.min(1, t / PEARL_POP_TIME)));
       p.alpha = Math.min(1, t / PEARL_POP_TIME);
       const rise = quadOut(Math.min(1, t / PEARL_RISE_TIME)) * PEARL_RISE;

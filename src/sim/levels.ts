@@ -476,7 +476,11 @@ export const LEVELS: LevelDef[] = [
       { x: 360, y: 1130, hp: 1, golden: true },
     ],
     clams: [
-      { x: 360, y: 560, skin: 'baby' },
+      // NOT the 'baby' skin: its shell art is 124x131 against the 112px
+      // collision diameter every clam has, so a baby clam bounces ducks and
+      // stops the aim guide ~20px out in open water. Until CLAM_R is per-skin,
+      // only 'normal' and 'gold' (198x188) match the hitbox.
+      { x: 360, y: 560 },
       { x: 230, y: 780 },
       { x: 490, y: 780 },
     ],

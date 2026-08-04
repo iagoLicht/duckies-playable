@@ -31,6 +31,8 @@ export class Director {
   private respawnAt: number | null = null;
   /** consecutive settled ticks — the dead-board check only runs after a pause */
   private deadBoardTicks = 0;
+  /** shots already fired whose move has not been debited yet (same-frame guard) */
+  private pendingLaunches = 0;
 
   constructor(seed: number, levelIndex = 0) {
     this.levelIndex = levelIndex;
@@ -41,6 +43,21 @@ export class Director {
     this.world = new World(seed);
     this.slingshot = new Slingshot(this.world);
     this.slingshot.assist = def.assist;
+    // The launch EVENT stays the authority on spending a move, so any launch
+    // is charged. But the debit only lands when the next step drains it, and a
+    // second gesture arriving in the same frame would read the old budget and
+    // fire for free — so a shot in flight is counted against the budget the
+    // instant it leaves, which is what bars the slingshot.
+    this.slingshot.onLaunch = (): void => {
+      this.pendingLaunches++;
+      this.syncBlocked();
+    };
+  }
+
+  /** the budget is spent when everything already fired has been paid for */
+  private syncBlocked(): void {
+    this.slingshot.blocked =
+      this.movesLeft - this.pendingLaunches <= 0 || this.won || this.failed;
   }
 
   /** goals: barrels to break plus clams to crack */
@@ -51,7 +68,7 @@ export class Director {
   }
 
   start(): void {
-    this.slingshot.blocked = this.movesLeft === 0;
+    this.syncBlocked();
     for (const d of this.level.ducks) this.world.spawnDuck(d.colour, d.x, d.y);
     for (const b of this.level.barrels) {
       this.world.spawnBarrel('wood', b.x, b.y, b.hp, b.golden ?? false);
@@ -76,6 +93,7 @@ export class Director {
       if (e.type === 'duckLaunched') {
         // only a real launch costs a move; a refused aim never reaches here
         this.movesLeft = Math.max(0, this.movesLeft - 1);
+        this.pendingLaunches = Math.max(0, this.pendingLaunches - 1);
         this.pushLocal({ type: 'movesLeft', left: this.movesLeft });
       }
       if (e.type === 'barrelDestroyed') {
@@ -106,8 +124,7 @@ export class Director {
       this.pushLocal({ type: 'finaleArmed' });
     }
 
-    // the budget bars the slingshot itself, not just the view
-    this.slingshot.blocked = this.movesLeft === 0 || this.won || this.failed;
+    this.syncBlocked(); // the budget bars the slingshot itself, not just the view
 
     this.handleRespawns();
   }
@@ -151,7 +168,9 @@ export class Director {
     // worth asking once everything has come to rest, and cheap at that rate.
     if (this.world.ducks.length >= target && this.boardSettled() && !this.slingshot.aiming) {
       this.deadBoardTicks++;
-      if (this.deadBoardTicks >= DEAD_BOARD_GRACE && !this.anyLegalShot()) {
+      // the sweep is ~20ms on a dead board, so ask once per grace window rather
+      // than every tick — otherwise a stuck board pays it twice a second
+      if (this.deadBoardTicks % DEAD_BOARD_GRACE === 0 && !this.anyLegalShot()) {
         this.deadBoardTicks = 0;
         const spot = this.freeSpot();
         const colours: Colour[] = ['yellow', 'green', 'purple', 'red'];
@@ -180,16 +199,29 @@ export class Director {
 
   private freeSpot(): { x: number; y: number } {
     const R = this.level.spawnRegion;
+    // how much room a candidate has: negative means it overlaps something
+    const clearance = (x: number, y: number): number => {
+      let worst = Infinity;
+      for (const d of this.world.ducks) worst = Math.min(worst, Math.hypot(d.x - x, d.y - y) - SIM.DUCK_R * 2.4);
+      for (const b of this.world.barrels) worst = Math.min(worst, Math.hypot(b.x - x, b.y - y) - (SIM.DUCK_R + SIM.BARREL_R + 8));
+      for (const c of this.world.clams) worst = Math.min(worst, Math.hypot(c.x - x, c.y - y) - (SIM.DUCK_R + SIM.CLAM_R + 8));
+      return worst;
+    };
+    let best = { x: (R.x0 + R.x1) / 2, y: (R.y0 + R.y1) / 2 };
+    let bestClear = -Infinity;
     for (let tries = 0; tries < 40; tries++) {
       const x = R.x0 + this.world.rng() * (R.x1 - R.x0);
       const y = R.y0 + this.world.rng() * (R.y1 - R.y0);
-      const clear =
-        this.world.ducks.every((d) => Math.hypot(d.x - x, d.y - y) > SIM.DUCK_R * 2.4) &&
-        this.world.barrels.every((b) => Math.hypot(b.x - x, b.y - y) > SIM.DUCK_R + SIM.BARREL_R + 8) &&
-        this.world.clams.every((c) => Math.hypot(c.x - x, c.y - y) > SIM.DUCK_R + SIM.CLAM_R + 8);
-      if (clear) return { x, y };
+      const c = clearance(x, y);
+      if (c > 0) return { x, y };
+      if (c > bestClear) {
+        bestClear = c;
+        best = { x, y };
+      }
     }
-    return { x: (R.x0 + R.x1) / 2, y: (R.y0 + R.y1) / 2 };
+    // nothing was clear: fall back to the roomiest candidate seen rather than
+    // the region's centre, which on a crowded board can sit inside an entity
+    return best;
   }
 
   private pushCounter(): void {

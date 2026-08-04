@@ -220,9 +220,14 @@ async function boot(): Promise<void> {
 
   // ── the live game: sim-driven entities, input, fx ────────────────────────
   // ?level=N (1-based) jumps straight to a level — for playtesting and for the
-  // screenshot harness, which needs to reach level 7 without playing six levels
-  const wanted = Number(new URLSearchParams(location.search).get('level'));
-  const startLevel = Number.isFinite(wanted) && wanted >= 1 ? Math.floor(wanted) - 1 : 0;
+  // screenshot harness, which needs to reach level 7 without playing six levels.
+  // DEV only: `import.meta.env.DEV` is statically false in the build, so the
+  // shipped ad always opens on level 1 and cannot be deep-linked past it.
+  let startLevel = 0;
+  if (import.meta.env.DEV) {
+    const wanted = Number(new URLSearchParams(location.search).get('level'));
+    if (Number.isFinite(wanted) && wanted >= 1) startLevel = Math.floor(wanted) - 1;
+  }
   const scene = new GameScene(app, 20260802, startLevel);
   await scene.init();
 
