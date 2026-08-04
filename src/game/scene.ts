@@ -32,6 +32,7 @@ import goalIconUrl from '../assets/icons/goal-Barrel.webp';
 import clamIconUrl from '../assets/icons/goal-Bumper.webp';
 import avatarUrl from '../assets/ui/hud-avatar.webp';
 import cherryBombUrl from '../assets/fonts/cherry-bomb.woff2';
+import asapBlackUrl from '../assets/fonts/asap-black.woff2';
 
 const DUCK_SCALE = 0.9;
 const BARREL_SCALE = 0.85;
@@ -302,8 +303,17 @@ const AIM_PULL_MAX_T = 0.65;
 //
 // This also collapses what used to be three separate plates (pearls | moves |
 // crates) into two groups.
-/** the family name we register the woff2 under — the file's own is irrelevant */
+/**
+ * The two faces we register the woff2s under — the files' own names are
+ * irrelevant. Both are the pack's, and the manifest assigns them:
+ *  - CherryBombOne: "Primary display/title face (rounded bubbly). Headers/CTA/
+ *    score." Used for the digits and the goal counts.
+ *  - asap-semicondensed-black: "Heavy condensed number/counter font." Used for
+ *    the MOVES / GOALS section labels, which in the real HUD are a heavy
+ *    condensed sans rather than the bubbly face.
+ */
 const HUD_FONT = 'CherryBomb';
+const HUD_LABEL_FONT = 'AsapBlack';
 /** the reassembly's bar, and ours: everything else scales between them */
 const REF_BAR_W = 622;
 const BAR_W = 681, BAR_X = 360, BAR_TOP = 45;
@@ -340,6 +350,13 @@ const AVATAR_W = 128 * REF_K, AVATAR_H = 98 * REF_K;
 const AVATAR_ART_W = AVATAR_W * 0.92;
 /** section labels: 18px, 1.5 letter-spacing, white with a soft drop */
 const HUD_LABEL_SIZE = 18 * REF_K;
+/**
+ * Where a label's Text ORIGIN goes relative to the bar's top edge, so the caps
+ * end up bisected by it — half the glyph above the bar, half below. Not zero,
+ * because a Text box is centred on ascent+descent while these all-caps labels
+ * only ever occupy the top part of it. Measured off the render.
+ */
+const HUD_LABEL_BASE = 1.8;
 /** the counter number punches this big for a beat whenever it changes */
 const HUD_PUNCH = 1.3, HUD_PUNCH_TIME = 0.12;
 
@@ -1608,6 +1625,7 @@ export class GameScene {
     // registered AND fully loaded before the first Text exists — a Text built
     // a frame early bakes a fallback-font texture and never re-renders itself.
     document.fonts.add(await new FontFace(HUD_FONT, `url("${cherryBombUrl}")`).load());
+    document.fonts.add(await new FontFace(HUD_LABEL_FONT, `url("${asapBlackUrl}")`).load());
 
     const left = BAR_X - BAR_W / 2;
     const bar = new Sprite(panelTexture({
@@ -1633,17 +1651,17 @@ export class GameScene {
       const t = new Text({
         text,
         style: {
-          fontFamily: HUD_FONT, fontSize: HUD_LABEL_SIZE, fill: 0xffffff, align: 'center',
+          fontFamily: HUD_LABEL_FONT, fontSize: HUD_LABEL_SIZE, fill: 0xffffff, align: 'center',
           letterSpacing: 1.5,
           dropShadow: { color: 0x000000, alpha: 0.25, blur: 0, angle: Math.PI / 2, distance: 2 },
         },
       });
       t.anchor.set(0.5);
-      // Both labels straddle the bar's top edge, sitting mostly above it. The
-      // reference puts their centre 2px above; Cherry Bomb carries more space
-      // under its baseline than the reference's face, so this leans a little
-      // further up to land the same way against the edge.
-      t.position.set(cx, BAR_TOP - 7);
+      // Both labels sit ON the bar's top edge, half above it and half below.
+      // The offset is the gap between a Text's BOX centre (which includes the
+      // descender space these all-caps labels never use) and the visual centre
+      // of the caps — measured off the render, see HUD_LABEL_BASE.
+      t.position.set(cx, BAR_TOP + HUD_LABEL_BASE);
       return t;
     };
 
