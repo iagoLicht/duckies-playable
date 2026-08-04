@@ -173,10 +173,10 @@ export const LEVELS: LevelDef[] = [
   // notice the counter; a player who spends five will still get there.
   {
     name: 'Pearl Diver',
-    moves: 9,
+    moves: 42,
     // 2 from the single clam: the teaching level for the dispenser, so it has to
     // show the shell RE-OPENING. One pearl would teach the old one-shot rule.
-    pearls: 2,
+    pearls: 30,
     assist: 0.6,
     targetDucks: 4,
     ducks: [
@@ -250,8 +250,8 @@ export const LEVELS: LevelDef[] = [
   // shell now carries enough speed to reach a second goal, so shots pay twice.
   {
     name: 'Deflection',
-    moves: 9,
-    pearls: 3,
+    moves: 19,
+    pearls: 30,
     assist: 0.45,
     targetDucks: 4,
     ducks: [
@@ -302,8 +302,8 @@ export const LEVELS: LevelDef[] = [
   // the p75 to 9.
   {
     name: 'Twin Pearls',
-    moves: 9,
-    pearls: 4,
+    moves: 18,
+    pearls: 30,
     assist: 0.45,
     targetDucks: 4,
     ducks: [
@@ -380,8 +380,8 @@ export const LEVELS: LevelDef[] = [
   // to arrive sideways.
   {
     name: 'Pinball',
-    moves: 9,
-    pearls: 4,
+    moves: 20,
+    pearls: 30,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -433,8 +433,8 @@ export const LEVELS: LevelDef[] = [
   // Budget intent: 4 crates + 3 pearls in 11 shots, with the ordering forced.
   {
     name: 'The Vault',
-    moves: 8,
-    pearls: 3,
+    moves: 21,
+    pearls: 30,
     assist: 0.4,
     targetDucks: 4,
     ducks: [
@@ -551,8 +551,8 @@ export const LEVELS: LevelDef[] = [
   // too easy the honest fix is a harder board, not a tighter budget.
   {
     name: 'The Golden Pearl',
-    moves: 6,
-    pearls: 6,
+    moves: 11,
+    pearls: 30,
     assist: 0.4,
     targetDucks: 5,
     ducks: [
