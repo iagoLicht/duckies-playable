@@ -55,8 +55,27 @@ const PANEL_TOP = 400;
 /** wider than the panel on purpose — the banner is meant to overhang it */
 const RIBBON_W = 640;
 const RIBBON_CY = PANEL_TOP + 24;
-/** the ribbon's banner band sits a touch above the art's centre */
-const TITLE_DY = -16;
+const RIBBON_SCALE = RIBBON_W / RIBBON_SRC_W;
+/**
+ * The pink band is NOT centred in its own texture — the curled tails hang
+ * below it and drag the image's centre down with them. A probe at the middle
+ * column found pink spanning y 4..211 of the 338-tall source, putting the
+ * band's centre 61.5px ABOVE the texture's.
+ *
+ * So a title centred on the sprite sits visibly low on the ribbon. This lifts
+ * it onto the band's real centre line, and it is expressed in source px times
+ * the scale so it tracks any change to RIBBON_W.
+ */
+const TITLE_BAND_DY = -61.5 * RIBBON_SCALE;
+/**
+ * ...and then back down a little, because Pixi centres a Text on its LAYOUT
+ * box, which reserves descender room that an all-caps title never uses. The
+ * visible letters therefore ride above the box's centre. Measured off the
+ * render at this size: 9.3px on "YOU WIN!", 12.8px on "YOU LOST" — the spread
+ * is the '!' against the 'T'. 11 splits them.
+ */
+const TITLE_INK_DY = 11;
+const TITLE_DY = TITLE_BAND_DY + TITLE_INK_DY;
 
 /**
  * How far the title's outer letters drop below its middle, in design px.
@@ -151,9 +170,11 @@ const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
  * text-on-a-path, and warping a bitmap would soften the face's outline, which
  * is the one thing a title at this size cannot afford.
  *
- * The apex is raised by half the rise so the block's visual centre lands on
- * `cy`; without it, curving a previously flat title visibly drops it down the
- * banner.
+ * The apex sits half a rise ABOVE `cy`, so the ends fall half a rise below it
+ * and the block's centre lands on `cy`. Getting that sign backwards puts the
+ * whole title a full rise-height low, and — because the error scales with the
+ * curve — it masquerades as a vertical-offset problem that no amount of
+ * adjusting the offset ever fixes.
  */
 function arcText(
   text: string, style: TextStyleOptions,
@@ -177,9 +198,9 @@ function arcText(
   const radius = (half * half + rise * rise) / (2 * rise);
 
   const box = new Container();
-  // arc centre sits directly below the apex
+  // arc centre sits directly below the apex, which is half a rise above cy
   const acx = cx;
-  const acy = cy + rise / 2 + radius;
+  const acy = cy - rise / 2 + radius;
 
   let d = -total / 2;
   for (const [i, g] of glyphs.entries()) {
@@ -241,7 +262,7 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   // ── ribbon + title ───────────────────────────────────────────────────────
   const ribbon = new Sprite(tex.ribbon);
   ribbon.anchor.set(0.5);
-  ribbon.scale.set(RIBBON_W / RIBBON_SRC_W);
+  ribbon.scale.set(RIBBON_SCALE);
   ribbon.position.set(PANEL_CX, RIBBON_CY);
 
   const title = arcText(
