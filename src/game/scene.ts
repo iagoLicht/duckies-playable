@@ -154,8 +154,31 @@ const backOut = (t: number): number => {
   const u = t - 1;
   return 1 + (s + 1) * u * u * u + s * u * u;
 };
-/** explode_vfx runs 0.17s — a hair more so its last frame lands before destroy */
-const POP_TIME = 0.2;
+/**
+ * How long the popped duck's own rig stays. explode_vfx is authored at 0.17s,
+ * but the real-game footage cuts the duck's remains ~3 frames (~100ms) after
+ * the splash pancake lands (Explosion.mp4 f118 -> f121) — held longer, the
+ * shrinking body squats on top of the splash's star hole and muddies it.
+ */
+const POP_TIME = 0.11;
+
+// ── the pop splash, traced from real-game footage (Explosion.mp4 f118-f127,
+// 30fps). The rig's explode_vfx only bursts the DUCK — the water answer is a
+// separate effect: an opaque white pancake snaps up under the duck (2 frames),
+// a water-blue star-shaped hole opens mid-disc while duck-coloured chips
+// scatter, then the disc dissolves into white lace — a thin ring, X-cross
+// spokes and droplets — that swells a touch and fades. ~0.3s all told.
+// The star hole is drawn, not sampled: the shipped ssa-explosion sheet holds a
+// soft shader-gradient star that never crispens into the footage's flat
+// cartoon cutout, so the shape is traced from the frames instead.
+const SPLASH_R = 92;            // pancake radius: video shows 2.0x the duck body
+const SPLASH_WATER = 0x46c8ee;  // the tub water sampled where the star punches through
+const SPLASH_GROW = 0.066;      // f118-f119: pancake reaches full size
+const SPLASH_STAR_AT = 0.066;   // f120: the star hole starts opening…
+const SPLASH_STAR_TIME = 0.1;   // …and is fully open by f122
+const SPLASH_LACE_AT = 0.166;   // f123: pancake -> lace
+const SPLASH_TIME = 0.3;        // f127: gone
+const SPLASH_CHIPS = 6;
 
 // ── pop feel, lifted from the official example (decomp GameScene.onPop) ──────
 /** star tint on a pop: their warm-white `Yn(..., 16773304)` burst */
@@ -171,6 +194,13 @@ const DESIGN_W = 720, DESIGN_H = 1280;
 const PUNCH_SCALE = 1.22, PUNCH_TIME = 0.1;
 /** their match burst is the pop burst at 0.7 */
 const MATCH_BURST = 0.7;
+/**
+ * How far a fuse blink pulls the duck's hue toward white. The official goes
+ * all the way (1 = flat-white silhouette, decomp syncMatchFlash); deliberately
+ * softened here so the pulse reads as a warning while the duck stays clearly
+ * its own colour. Timing/cadence of the blink is untouched — only intensity.
+ */
+const MATCH_FLASH_MIX = 0.35;
 
 // ── motion wake ──────────────────────────────────────────────────────────────
 // The OFFICIAL duck wake, verbatim (decomp In.syncWake/makeWake at 90 px/unit):
@@ -404,6 +434,32 @@ async function loadTexture(url: string): Promise<Texture> {
   return Texture.from(img);
 }
 
+/**
+ * The splash's star-shaped hole, traced from the footage: a fat four-point
+ * star with concave sides (tips at N/E/S/W) over four thin diagonal spikes.
+ * Flat water colour, crisp edge — it reads as the tub showing THROUGH the
+ * white pancake, which is exactly what the real effect is.
+ */
+function drawSplashStar(g: Graphics): Graphics {
+  const R1 = SPLASH_R * 0.72; // tip radius
+  const R2 = R1 * 0.2;        // waist radius between tips
+  for (let i = 0; i < 4; i++) {
+    const a = Math.PI / 4 + (i * Math.PI) / 2;
+    g.moveTo(0, 0).lineTo(Math.cos(a) * R1 * 0.9, Math.sin(a) * R1 * 0.9);
+  }
+  g.stroke({ width: 5, color: SPLASH_WATER, cap: 'round' });
+  g.moveTo(0, -R1);
+  for (let i = 0; i < 4; i++) {
+    const tip = -Math.PI / 2 + ((i + 1) * Math.PI) / 2;
+    const waist = tip - Math.PI / 4;
+    g.quadraticCurveTo(
+      Math.cos(waist) * R2, Math.sin(waist) * R2,
+      Math.cos(tip) * R1, Math.sin(tip) * R1,
+    );
+  }
+  return g.closePath().fill(SPLASH_WATER);
+}
+
 /** oversample the baked HUD panels so their corners stay clean when scaled */
 const PANEL_SS = 3;
 
@@ -550,6 +606,8 @@ export class GameScene {
   private starTex!: Texture;
   /** soft white disc standing in for the official's blurred `foam` sprite */
   private blobTex!: Texture;
+  /** pop splashes live here — under the ducks, so the pancake reads as water */
+  private fxUnder = new Container();
   /** motion-trail puffs live here — under the ducks, so the wake reads behind */
   private trailLayer = new Container();
   /** where each duck last dropped a trail puff */
@@ -585,6 +643,9 @@ export class GameScene {
   private pearlText!: Text;
   private clamIcon!: Sprite;
   private crateIcon!: Sprite;
+  /** green ticks that take a goal count's place the moment it reaches zero */
+  private goalCheck!: Graphics;
+  private pearlCheck!: Graphics;
   /** centre of the GOALS inset and the icon row's top, resolved in buildHud */
   private goalsCentre = BAR_X;
   private goalsIconY = BAR_TOP + 10;
@@ -645,7 +706,7 @@ export class GameScene {
     this.crescent.visible = false;
     this.aimUnder.addChild(this.aimLine, this.crescent);
     this.trailTex = await loadTexture(trailUrl);
-    this.app.stage.addChild(this.aimUnder, this.trailLayer, this.layer, this.fx, this.hud);
+    this.app.stage.addChild(this.aimUnder, this.trailLayer, this.fxUnder, this.layer, this.fx, this.hud);
     await this.buildHud();
 
     // The rig's `active-ring` and `aim` skins ship ZERO attachments — they exist
@@ -748,7 +809,16 @@ export class GameScene {
     };
     stage.on('pointerup', up);
     stage.on('pointerupoutside', up);
-    stage.on('pointercancel', (e) => {
+    // NOTE: Pixi v8's EventSystem registers NO DOM pointercancel/touchcancel
+    // listener (it wires move/down/up/over/leave only — verified against
+    // node_modules/pixi.js/lib/events/EventSystem.js), so a stage-level
+    // 'pointercancel' handler would never fire from a real cancel. On phones a
+    // cancelled touch (notification shade, browser back-gesture, palm
+    // rejection) ends the sequence with NO pointerup — without this DOM-level
+    // listener the grab would stay stuck and, because pointerdown refuses
+    // while a grab is active, every later touch would be ignored: a bricked
+    // playable. Registered once for the page's lifetime, like the stage's own.
+    window.addEventListener('pointercancel', (e: PointerEvent) => {
       if (e.pointerId !== this.activePointer) return;
       this.activePointer = null;
       this.director.slingshot.cancel(); // cancelled: drop the grab without firing
@@ -1061,17 +1131,17 @@ export class GameScene {
         }
         this.flashOn.delete(e.id);
         this.flashSlots.delete(e.id);
-        this.burst(e.x, e.y, POP_STAR_TINT, 1);
-        this.popFlash(e.x, e.y, e.colour);
+        this.splash(e.x, e.y, e.colour);
         this.hitstop = HITSTOP;
         this.shake = SHAKE_TIME;
         this.audio.play('duckExplode');
         break;
       }
       case 'blast':
-        // no sound of its own: `blast` is pushed on the same tick as the
-        // `duckPopped` at the same position, and duck-explode covers both
-        this.flashBlast(e.x, e.y, e.r, e.colour);
+        // DELIBERATELY no visual and no sound of its own: the real-game
+        // footage (Explosion.mp4) shows nothing at the blast radius — the pop
+        // splash is the whole read — and `blast` lands on the same tick as its
+        // `duckPopped`, whose duck-explode clip covers both.
         break;
       case 'wallHit':
         if (e.source === 'bumper') this.burst(e.x, e.y, 0xffb459, 0.8);
@@ -1157,7 +1227,7 @@ export class GameScene {
       case 'pearlCounter':
         this.pearlGroup.visible = e.total > 0;
         // the reference shows what is LEFT to do, not a done/total fraction
-        this.setCounter(this.pearlText, String(e.left));
+        this.setGoal(this.pearlText, this.pearlCheck, e.left);
         break;
       case 'bumperHit':
         // fires on every glancing contact, so it stays to one cheap star
@@ -1176,7 +1246,7 @@ export class GameScene {
         break;
       case 'counter':
         // crates REMAINING, to read the same way as the pearl count beside it
-        this.setCounter(this.goalText, String(Math.max(0, e.total - e.done)));
+        this.setGoal(this.goalText, this.goalCheck, Math.max(0, e.total - e.done));
         break;
       case 'levelCleared': {
         console.log(`level ${e.index + 1} CLEARED with ${e.movesLeft} moves to spare`);
@@ -1184,11 +1254,19 @@ export class GameScene {
         this.audio.play('pointWhoosh');
         const next = e.index + 1;
         // the campaign rolls straight on; the last level just stays cleared,
-        // holding the celebration until an end card exists to take over
-        if (next < LEVELS.length) this.after(LEVEL_ADVANCE_DELAY, () => this.loadLevel(next));
+        // holding the celebration until an end card exists to take over.
+        // Bound to THIS director: if the board is swapped by hand (dev level
+        // picker) before the delay elapses, the stale hop must not fire and
+        // yank the player off the level they just chose.
+        const dir = this.director;
+        if (next < LEVELS.length) {
+          this.after(LEVEL_ADVANCE_DELAY, () => {
+            if (this.director === dir) this.loadLevel(next);
+          });
+        }
         break;
       }
-      case 'levelFailed':
+      case 'levelFailed': {
         console.log(`level ${e.index + 1} FAILED — out of moves`);
         // DELIBERATELY SILENT. The event map lists LoseTitle_Enter but at
         // priority `nice`, and no fail clip was extracted from the bank — there
@@ -1196,9 +1274,14 @@ export class GameScene {
         // one would be inventing a sound the game does not have, so the cold
         // ring carries the beat on its own.
         this.lament();
-        // a miss costs nothing but the retry — same board, fresh budget
-        this.after(LEVEL_RETRY_DELAY, () => this.loadLevel(e.index));
+        // a miss costs nothing but the retry — same board, fresh budget.
+        // Same stale-hop guard as the cleared path above.
+        const failedDir = this.director;
+        this.after(LEVEL_RETRY_DELAY, () => {
+          if (this.director === failedDir) this.loadLevel(e.index);
+        });
         break;
+      }
       default:
         break; // finaleArmed/won ride on levelCleared; end-card UI is a later change
     }
@@ -1223,6 +1306,7 @@ export class GameScene {
     this.barrelViews.clear();
     this.clamViews.clear();
     this.fx.removeChildren();
+    this.fxUnder.removeChildren();
     if (this.hand) {
       this.fx.addChild(this.hand);
       this.hand.visible = index === 0; // the tutorial only greets level 1
@@ -1231,8 +1315,6 @@ export class GameScene {
     this.spawnTimer = 0;
     this.spawning.clear();
     this.pearlFlights.clear();
-    // the new level may not have clams, so the goal row re-centres on what it has
-    this.layoutGoals();
     this.setTimer(LEVEL_SECONDS, true);
     this.ringMode.clear();
     this.aimBoneRot.clear();
@@ -1260,6 +1342,10 @@ export class GameScene {
 
     // a per-level seed keeps every level's respawns deterministic on their own
     this.director = new Director(this.seed + index, index);
+    // the goal row re-centres on what the level actually has — and it must read
+    // the NEW director's level: laid out any earlier, a level gaining clams
+    // would surface the pearl goal wherever it last sat (unplaced, on level 1)
+    this.layoutGoals();
     this.director.start();
     this.drainEvents();
   }
@@ -1571,12 +1657,103 @@ export class GameScene {
     this.app.ticker.add(anim);
   }
 
-  /** Additive duck-tinted bloom at the pop — the official's `foam` flash. */
-  private popFlash(x: number, y: number, colour: Colour): void {
-    this.foamFlash(x, y, TINTS[colour]);
+  /**
+   * The real game's pop splash, phase for phase off Explosion.mp4:
+   *   A f118-119  an opaque white pancake snaps up under the duck while the
+   *               rig's own explode bursts the body on top of it
+   *   B f120-122  a star-shaped hole (water showing through) opens mid-disc;
+   *               duck-coloured chips scatter across the pancake
+   *   C f123-127  the pancake dissolves into white lace — thin ring, X-cross
+   *               spokes, droplets — swelling slightly as everything fades
+   */
+  private splash(x: number, y: number, colour: Colour): void {
+    const disc = new Graphics().circle(0, 0, SPLASH_R).fill(0xffffff);
+    disc.position.set(x, y);
+    disc.scale.set(0.25);
+    const star = drawSplashStar(new Graphics());
+    star.position.set(x, y);
+    star.scale.set(0);
+    // the lace, pre-drawn at full size and kept hidden until phase C
+    const lace = new Graphics().circle(0, 0, SPLASH_R).stroke({ width: 7, color: 0xffffff });
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + (i * Math.PI) / 2;
+      lace.moveTo(0, 0).lineTo(Math.cos(a) * SPLASH_R, Math.sin(a) * SPLASH_R)
+        .stroke({ width: 5, color: 0xffffff });
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + 0.35;
+      lace.circle(Math.cos(a) * SPLASH_R * 1.1, Math.sin(a) * SPLASH_R * 1.1, 4).fill(0xffffff);
+    }
+    // speckles inside the ring — the video's lace keeps white flecks where the
+    // pancake was, which stops the ring+cross reading as bare geometry
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 1.1;
+      const rr = SPLASH_R * (0.45 + (i % 3) * 0.14);
+      lace.circle(Math.cos(a) * rr, Math.sin(a) * rr, 3 + (i % 2)).fill(0xffffff);
+    }
+    lace.position.set(x, y);
+    lace.visible = false;
+    this.fxUnder.addChild(disc, star, lace);
+
+    // duck-coloured chips riding the pancake outward (video: clear duck hue)
+    const chips: Array<{ s: Sprite; vx: number; vy: number }> = [];
+    for (let i = 0; i < SPLASH_CHIPS; i++) {
+      const s = new Sprite(this.starTex);
+      s.anchor.set(0.5);
+      s.tint = TINTS[colour];
+      s.rotation = i * 1.7;
+      s.width = s.height = 14 + (i % 3) * 5;
+      s.visible = false;
+      const a = (i / SPLASH_CHIPS) * Math.PI * 2 + 0.9;
+      // video f120: the chips are already spread when the star opens — they
+      // ride the pancake's rim outward, they don't crawl from the centre
+      s.position.set(x + Math.cos(a) * 38, y + Math.sin(a) * 38);
+      const sp = 380 + (i % 2) * 140;
+      chips.push({ s, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp });
+      this.fxUnder.addChild(s);
+    }
+
+    let t = 0;
+    const anim = (tk: { deltaMS: number }): void => {
+      const dt = tk.deltaMS / 1000;
+      t += dt;
+      // A: the pancake snap
+      const grow = Math.min(1, t / SPLASH_GROW);
+      disc.scale.set(0.25 + 0.75 * quadOut(grow));
+      // B: the star hole + chips
+      if (t >= SPLASH_STAR_AT) {
+        const q = Math.min(1, (t - SPLASH_STAR_AT) / SPLASH_STAR_TIME);
+        star.scale.set(quadOut(q));
+        for (const c of chips) {
+          c.s.visible = true;
+          c.s.x += c.vx * dt;
+          c.s.y += c.vy * dt;
+          c.vx *= 1 - 4 * dt; // chips settle onto the water, they don't fly off
+          c.vy *= 1 - 4 * dt;
+        }
+      }
+      // C: pancake -> lace
+      if (t >= SPLASH_LACE_AT) {
+        const r = Math.min(1, (t - SPLASH_LACE_AT) / (SPLASH_TIME - SPLASH_LACE_AT));
+        disc.alpha = Math.max(0, 1 - r * 2.5); // the solid disc dies fast…
+        star.alpha = disc.alpha;
+        lace.visible = true; // …and its rim survives as the lace
+        lace.scale.set(1 + 0.12 * r);
+        lace.alpha = r < 0.35 ? 1 : 1 - (r - 0.35) / 0.65;
+        for (const c of chips) c.s.alpha = lace.alpha;
+      }
+      if (t >= SPLASH_TIME) {
+        this.app.ticker.remove(anim);
+        disc.destroy();
+        star.destroy();
+        lace.destroy();
+        for (const c of chips) c.s.destroy();
+      }
+    };
+    this.app.ticker.add(anim);
   }
 
-  /** The bloom itself, at any tint — the clam's pearl uses the bumper pink. */
+  /** The bloom, at any tint — the clam's pearl uses the bumper pink. */
   private foamFlash(x: number, y: number, tint: number): void {
     const s = new Sprite(this.blobTex);
     s.anchor.set(0.5);
@@ -1687,10 +1864,12 @@ export class GameScene {
    * Match blink. The official whites the duck out by copying every attachment
    * and forcing its colour to opaque white (decomp isolateAttachmentsForFlash +
    * syncMatchFlash) — this rig is built the same way, with the duck's hue living
-   * in the attachment colours over neutral art, so the same trick lands the same
-   * flat-white silhouette. Attachments are shared across every duck of a colour,
-   * hence the per-instance copy. Re-isolated at each white band so an animation
-   * that swapped an attachment mid-fuse can't strand a slot.
+   * in the attachment colours over neutral art. Here the hue is pulled only
+   * MATCH_FLASH_MIX of the way to white: same blink, same cadence, but the duck
+   * keeps reading in its own colour instead of flat white. Attachments are
+   * shared across every duck of a colour, hence the per-instance copy.
+   * Re-isolated at each band so an animation that swapped an attachment
+   * mid-fuse can't strand a slot.
    */
   private syncMatchFlash(d: Duck, v: Spine): void {
     const on = d.matched && Math.floor(d.matchFuse / SIM.MATCH_BLINK_TICKS) % 2 === 0;
@@ -1704,7 +1883,15 @@ export class GameScene {
         slot.setAttachment(copy);
         slots.push({ color: copy.color, orig: [copy.color.r, copy.color.g, copy.color.b, copy.color.a] });
       }
-      for (const s of slots) s.color.set(1, 1, 1, 1);
+      for (const s of slots) {
+        // part-way toward white, not onto it — a gentle brighten, same cadence
+        s.color.set(
+          s.orig[0] + (1 - s.orig[0]) * MATCH_FLASH_MIX,
+          s.orig[1] + (1 - s.orig[1]) * MATCH_FLASH_MIX,
+          s.orig[2] + (1 - s.orig[2]) * MATCH_FLASH_MIX,
+          s.orig[3],
+        );
+      }
       this.flashSlots.set(d.id, slots);
       this.flashOn.add(d.id);
     } else {
@@ -1714,24 +1901,6 @@ export class GameScene {
       this.flashSlots.delete(d.id);
       this.flashOn.delete(d.id);
     }
-  }
-
-  private flashBlast(x: number, y: number, r: number, colour: Colour): void {
-    // secondary now: barrel-damage feedback behind the rig's explode vfx
-    const g = new Graphics().circle(x, y, r).stroke({ width: 10, color: TINTS[colour], alpha: 0.5 });
-    this.fx.addChild(g);
-    let t = 0;
-    const anim = (tk: { deltaMS: number }): void => {
-      t += tk.deltaMS / 1000;
-      g.alpha = Math.max(0, 1 - t / 0.25);
-      g.scale.set(1 + t * 1.2);
-      g.pivot.set(x * (g.scale.x - 1) / g.scale.x, y * (g.scale.y - 1) / g.scale.y);
-      if (t >= 0.25) {
-        this.app.ticker.remove(anim);
-        g.destroy();
-      }
-    };
-    this.app.ticker.add(anim);
   }
 
   /**
@@ -1888,14 +2057,33 @@ export class GameScene {
       return s;
     };
 
+    // The tick that replaces a count at zero: drawn (no check asset ships in
+    // the pack), in the count's own visual language — the same dark outline
+    // the numbers wear, filled with the game's ring green. Centred on its own
+    // origin so the punch scales it in place, like the numbers do.
+    const goalCheck = (): Graphics => {
+      const s = GOAL_ICON * (26 / 52); // a touch bigger than the count it replaces
+      const path = (g: Graphics): Graphics => g
+        .moveTo(-0.42 * s, 0.04 * s)
+        .lineTo(-0.1 * s, 0.34 * s)
+        .lineTo(0.44 * s, -0.3 * s);
+      const g = new Graphics();
+      path(g).stroke({ width: 0.52 * s, color: 0x35304a, cap: 'round', join: 'round' });
+      path(g).stroke({ width: 0.28 * s, color: TINTS.green, cap: 'round', join: 'round' });
+      g.visible = false;
+      return g;
+    };
+
     const clamIcon = await goalIcon(clamIconUrl);
     this.pearlText = count();
-    this.pearlGroup.addChild(clamIcon, this.pearlText);
+    this.pearlCheck = goalCheck();
+    this.pearlGroup.addChild(clamIcon, this.pearlText, this.pearlCheck);
     this.clamIcon = clamIcon;
 
     const crateIcon = await goalIcon(goalIconUrl);
     this.crateIcon = crateIcon;
     this.goalText = count();
+    this.goalCheck = goalCheck();
 
     // ── the avatar, breaking out of the bar's top-left ──
     const frameX = left + AVATAR_DX, frameY = BAR_TOP + AVATAR_DY;
@@ -1935,7 +2123,7 @@ export class GameScene {
     // counts on the inset, and the labels last so they read over the top edge
     this.hud.addChild(
       inset,
-      crateIcon, this.goalText,
+      crateIcon, this.goalText, this.goalCheck,
       this.pearlGroup,
       frame, avatar, lip,
       label('TIMER', tilesX + tilesW / 2),
@@ -2044,30 +2232,62 @@ export class GameScene {
     const span = showClam ? cw + GOAL_GAP + bw : bw;
     let x = this.goalsCentre - span / 2;
     const y = this.goalsIconY;
+    // the tick sits centred over the digits' spot: the count anchors its
+    // bottom-left at the icon's lower right, so the middle of a one-or-two
+    // digit number is up and right of that anchor by about half a cap
+    const checkAt = (g: Graphics, ax: number, ay: number): void => {
+      g.position.set(ax + GOAL_ICON * (12 / 52), ay - GOAL_ICON * (10 / 52));
+    };
     if (showClam) {
       this.clamIcon.position.set(x, y);
       this.pearlText.position.set(x + cw * (32 / 52), y + GOAL_ICON + GOAL_COUNT_DY);
+      checkAt(this.pearlCheck, this.pearlText.x, this.pearlText.y);
       // where a spilled pearl flies to — its own icon, so it lands on the count
       this.pearlTarget = { x: x + cw / 2, y: y + GOAL_ICON / 2 };
       x += cw + GOAL_GAP;
     }
     this.crateIcon.position.set(x, y);
     this.goalText.position.set(x + bw * (32 / 52), y + GOAL_ICON + GOAL_COUNT_DY);
+    checkAt(this.goalCheck, this.goalText.x, this.goalText.y);
   }
 
   /** Set a counter and punch it, so a cleared goal is felt. */
   private setCounter(t: Text, value: string): void {
     if (t.text === value) return;
     t.text = value;
+    this.punchNode(t);
+  }
+
+  /**
+   * A goal's remaining count — and, at zero, the number gives way to the green
+   * tick (punched in the same way, so "done" lands with the same beat every
+   * other count change has). A level load runs the same path backwards: the
+   * fresh counter event brings the number back and hides the tick.
+   */
+  private setGoal(t: Text, check: Graphics, left: number): void {
+    if (left > 0) {
+      check.visible = false;
+      t.visible = true;
+      this.setCounter(t, String(left));
+      return;
+    }
+    t.visible = false;
+    if (!check.visible) {
+      check.visible = true;
+      this.punchNode(check);
+    }
+  }
+
+  /** The counters' scale punch — out then back, Quad.easeOut each leg. */
+  private punchNode(n: { scale: { set(v: number): unknown } }): void {
     let e = 0;
     const anim = (tk: { deltaMS: number }): void => {
       e += tk.deltaMS / 1000;
-      // out then back, Quad.easeOut each leg — the duck punch's shape
       const leg = e < HUD_PUNCH_TIME ? e / HUD_PUNCH_TIME : 1 - (e - HUD_PUNCH_TIME) / HUD_PUNCH_TIME;
-      t.scale.set(1 + (HUD_PUNCH - 1) * quadOut(Math.max(0, leg)));
+      n.scale.set(1 + (HUD_PUNCH - 1) * quadOut(Math.max(0, leg)));
       if (e >= HUD_PUNCH_TIME * 2) {
         this.app.ticker.remove(anim);
-        t.scale.set(1);
+        n.scale.set(1);
       }
     };
     this.app.ticker.add(anim);
