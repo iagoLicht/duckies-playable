@@ -1,4 +1,7 @@
-import { Application, Container, Graphics, NineSliceSprite, Sprite, Text, Texture } from 'pixi.js';
+import {
+  Application, Container, Graphics, NineSliceSprite, Sprite, Text, Texture,
+  type TextStyleOptions,
+} from 'pixi.js';
 
 import panelUrl from '../assets/ui/popup-body-tall.webp';
 import ribbonUrl from '../assets/icons/ribbon-pink.webp';
@@ -55,6 +58,29 @@ const RIBBON_CY = PANEL_TOP + 24;
 /** the ribbon's banner band sits a touch above the art's centre */
 const TITLE_DY = -16;
 
+/**
+ * The title arcs along the banner instead of sitting flat across it.
+ *
+ * MEASURED off the source art, not guessed: a probe walked ribbon-banner.png
+ * (1004x338) column by column taking the band's top edge, and found it 41.5px
+ * higher at the centre than at x=90/x=914 — a sagitta over an 824px span, which
+ * solves to a circular arc of radius 2066px. Expressed as a fraction of the
+ * texture width (2.058) so it survives any rescale of RIBBON_W.
+ *
+ * The arc bulges UP, so the middle letters ride highest and the outer ones drop
+ * away and tilt, exactly as the banner does.
+ */
+const RIBBON_ARC_K = 2.058;
+/** extra tracking between letters — arc text loses the font's own kerning */
+const TITLE_TRACKING = 2;
+/**
+ * The banner's flat band, inside the curled end tails. A title wider than this
+ * runs out over the curls and reads as overflowing the ribbon, so it is scaled
+ * down to fit rather than clipped — which also means a longer word later
+ * ("LEVEL COMPLETE!") degrades gracefully instead of breaking the card.
+ */
+const TITLE_MAX_W = 468;
+
 const BUTTON_W = 430;
 const BUTTON_CY = PANEL_TOP + 275;
 /** the button art carries a bottom bevel, so the label rides above centre */
@@ -108,6 +134,56 @@ const backOut = (t: number): number => {
 const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
 
 /**
+ * Lay a string along a circular arc of `radius`, apex-up, centred on (cx, cy).
+ *
+ * One `Text` per glyph, each rotated to the arc's tangent — Pixi has no
+ * text-on-a-path, and a bitmap-warped alternative would soften the face's
+ * outline, which is the one thing the title cannot afford at this size.
+ *
+ * The apex is raised by half the arc's own rise so the block's visual centre
+ * lands on `cy`; without that, curving a previously flat title visibly drops it
+ * down the banner.
+ */
+function arcText(
+  text: string, style: TextStyleOptions,
+  cx: number, cy: number, radius: number, tracking: number, maxWidth: number,
+): Container {
+  const glyphs = [...text].map((ch) => new Text({ text: ch, style }));
+  for (const g of glyphs) g.anchor.set(0.5);
+
+  const advances = glyphs.map((g) => g.width + tracking);
+  const total = advances.reduce((a, b) => a + b, 0) - tracking;
+  // shrink-to-fit rather than clip. Applied to the finished container, so the
+  // arc's geometry is computed once at full size and simply scaled — the
+  // letters stay on the same curve instead of re-solving to a flatter one.
+  const fit = Math.min(1, maxWidth / total);
+
+  // how far the ends fall below the apex, so the block can be re-centred
+  const half = Math.min(total / 2, radius);
+  const rise = radius - Math.sqrt(Math.max(0, radius * radius - half * half));
+
+  const box = new Container();
+  // arc centre sits directly below the apex
+  const acx = cx;
+  const acy = cy + rise / 2 + radius;
+
+  let d = -total / 2;
+  for (const [i, g] of glyphs.entries()) {
+    const mid = d + (advances[i]! - tracking) / 2;
+    const a = mid / radius; // arc length over radius — the tangent angle too
+    g.position.set(acx + radius * Math.sin(a), acy - radius * Math.cos(a));
+    g.rotation = a;
+    box.addChild(g);
+    d += advances[i]!;
+  }
+  // scale about the apex, so shrinking does not slide the title off the band
+  box.pivot.set(acx, cy);
+  box.position.set(acx, cy);
+  box.scale.set(fit);
+  return box;
+}
+
+/**
  * The end card. Whether it is terminal is the caller's business (see flow.ts):
  * this only knows what to say and what to call when tapped.
  *
@@ -154,15 +230,15 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   ribbon.scale.set(RIBBON_W / RIBBON_SRC_W);
   ribbon.position.set(PANEL_CX, RIBBON_CY);
 
-  const title = new Text({
-    text: o.title,
-    style: {
+  const title = arcText(
+    o.title,
+    {
       fontFamily: HUD_FONT, fontSize: 82, fill: 0xffffff, align: 'center',
       stroke: { color: 0x9c3a5e, width: 12, join: 'round' },
     },
-  });
-  title.anchor.set(0.5);
-  title.position.set(PANEL_CX, RIBBON_CY + TITLE_DY);
+    PANEL_CX, RIBBON_CY + TITLE_DY, RIBBON_W * RIBBON_ARC_K,
+    TITLE_TRACKING, TITLE_MAX_W,
+  );
 
   const ribbonBox = new Container();
   ribbonBox.addChild(ribbon, title);
