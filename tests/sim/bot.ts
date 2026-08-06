@@ -40,6 +40,14 @@ export interface BotOpts {
    * is what tests/tools/tune-levels.mjs exists to choose.
    */
   unlimitedMoves?: boolean;
+  /**
+   * Ignore the board's 30 s countdown (default true) — `Director.untimed`. Same
+   * argument as `unlimitedMoves`: the bot fires roughly every 2 s, so thirty
+   * seconds is about thirteen shots, and both callers here routinely need more
+   * than that. Leaving the clock running would turn the solvability gate and the
+   * budget tuner into measurements of the BOT's pace instead of the board's.
+   */
+  unlimitedTime?: boolean;
   /** sim-seconds before the run is abandoned */
   maxSeconds?: number;
   /** launches before the run is abandoned */
@@ -50,11 +58,13 @@ const HUGE_BUDGET = 1e9;
 
 export function playLevel(levelIndex: number, seed: number, opts: BotOpts = {}): BotStats {
   const unlimitedMoves = opts.unlimitedMoves ?? true;
+  const unlimitedTime = opts.unlimitedTime ?? true;
   const maxSeconds = opts.maxSeconds ?? 150;
   const maxShots = opts.maxShots ?? 120;
 
   const rng = mulberry32(seed * 7919 + 1);
   const dir = new Director(seed, levelIndex);
+  dir.untimed = unlimitedTime;
   dir.start();
   const goals = dir.level.barrels.length + dir.level.clams.length;
   const budget = dir.level.moves;

@@ -317,7 +317,10 @@ for (let index = 0; index < LEVELS.length; index++) {
       expect(d.boardSettled()).toBe(true);
       expect(d.failed).toBe(true);
       expect(d.won).toBe(false);
-      expect(only(drain(d), 'levelFailed')).toEqual([{ type: 'levelFailed', index }]);
+      // the clock is untouched here, so `reason` must name the budget — this is
+      // what stops the two limits being confused for each other on the end card
+      expect(only(drain(d), 'levelFailed'))
+        .toEqual([{ type: 'levelFailed', index, reason: 'moves' }]);
 
       // announced once, not once a frame
       run(d, 2);

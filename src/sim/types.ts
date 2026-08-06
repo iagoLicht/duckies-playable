@@ -102,8 +102,15 @@ export type SimEvent =
   | { type: 'bumperHit'; id: number; x: number; y: number }
   | { type: 'levelStarted'; index: number; name: string; moves: number }
   | { type: 'movesLeft'; left: number }
+  /** whole seconds left on the board's countdown; emitted only when it CHANGES,
+   *  so draining the queue does not cost 60 events a second for a number that
+   *  moves 30 times */
+  | { type: 'timeLeft'; seconds: number }
   | { type: 'counter'; done: number; total: number }
   | { type: 'finaleArmed' }
-  | { type: 'levelFailed'; index: number }
+  /** `reason` is which limit actually bit. Both are checked at the same settle
+   *  point, and time wins the tie — a board that runs out of both was out of
+   *  time first, since the clock cannot be spent early the way moves can. */
+  | { type: 'levelFailed'; index: number; reason: 'time' | 'moves' }
   | { type: 'levelCleared'; index: number; movesLeft: number }
   | { type: 'won' };

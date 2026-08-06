@@ -32,6 +32,18 @@ export class Director {
   failed = false;
   finaleArmed = false;
   movesLeft: number;
+  /**
+   * TEST AFFORDANCE, NOT A GAMEPLAY ONE. Freezes the countdown where it stands.
+   * Nothing in src/ sets it and the view has no path to it — it exists so a
+   * harness can ask a question the clock would otherwise answer on its behalf:
+   * playthrough.test.ts gates board SOLVABILITY ("can this be cleared at all?")
+   * and tune-levels.mjs measures shot-count percentiles, and neither is asking
+   * "does the distracted-thumb bot beat thirty seconds". It is the twin of
+   * bot.ts's existing `unlimitedMoves`, which suspends the other limit for
+   * exactly that reason. Raising SIM.LEVEL_TICKS to make those suites green was
+   * the rejected alternative: it would tune the ad's pacing to suit the bot.
+   */
+  untimed = false;
   private destroyed = 0;
   /** pearls that have REACHED the HUD — spilled-but-still-flying ones don't count */
   private pearlsCollected = 0;
@@ -40,6 +52,10 @@ export class Director {
   private deadBoardTicks = 0;
   /** shots already fired whose move has not been debited yet (same-frame guard) */
   private pendingLaunches = 0;
+  /** fixed steps left on the board's countdown — see SIM.LEVEL_TICKS */
+  private ticksLeft = SIM.LEVEL_TICKS;
+  /** the last whole second published, so `timeLeft` only fires on a change */
+  private lastSeconds = -1;
 
   constructor(seed: number, levelIndex = 0) {
     this.levelIndex = levelIndex;
@@ -64,7 +80,10 @@ export class Director {
   /** the budget is spent when everything already fired has been paid for */
   private syncBlocked(): void {
     this.slingshot.blocked =
-      this.movesLeft - this.pendingLaunches <= 0 || this.won || this.failed;
+      this.movesLeft - this.pendingLaunches <= 0 ||
+      this.ticksLeft <= 0 ||
+      this.won ||
+      this.failed;
   }
 
   /** crates destroyed — the barrel-icon counter */
@@ -78,6 +97,11 @@ export class Director {
       left: Math.max(0, this.level.pearls - this.pearlsCollected),
       total: this.level.pearls,
     };
+  }
+
+  /** seconds left, rounded UP — the clock reads 00 only once time is truly gone */
+  get secondsLeft(): number {
+    return Math.ceil(this.ticksLeft * SIM.DT);
   }
 
   /** every outstanding goal, of either kind — what the finale flourish counts */
@@ -101,6 +125,7 @@ export class Director {
     this.pushCounter();
     this.pushPearlCounter();
     this.pushLocal({ type: 'movesLeft', left: this.movesLeft });
+    this.pushTimeLeft();
   }
 
   step(dt: number): void {
@@ -128,6 +153,13 @@ export class Director {
       }
     }
 
+    // the clock only runs while the level is live, so a decided board is not
+    // left counting down behind a transition
+    if (!this.untimed && !this.won && !this.failed && this.ticksLeft > 0) {
+      this.ticksLeft--;
+      this.pushTimeLeft();
+    }
+
     // quota met: every clam retires to an inert (but solid and visible) bumper.
     // The event lands in world.events and drains on the next step, one tick
     // behind — harmless, and it keeps the drain loop free of world mutation.
@@ -142,11 +174,23 @@ export class Director {
       this.pushLocal({ type: 'won' });
     }
 
-    // the budget only bites once everything has settled — a shot in flight, a
-    // burning fuse or a drifting blast victim still gets to finish the job
-    if (!this.won && !this.failed && this.movesLeft === 0 && goalsLeft && this.boardSettled()) {
-      this.failed = true;
-      this.pushLocal({ type: 'levelFailed', index: this.levelIndex });
+    // Either limit only bites once everything has settled — a shot in flight, a
+    // burning fuse or a drifting blast victim still gets to finish the job. The
+    // clock bites the same way and for the same reason: it stops the NEXT shot
+    // the instant it reaches zero (syncBlocked), but never snatches a board away
+    // from a chain that is still resolving. That can push a run a second or two
+    // past thirty, which is cheaper than robbing a player mid-chain.
+    if (!this.won && !this.failed && goalsLeft && this.boardSettled()) {
+      const outOfTime = this.ticksLeft <= 0;
+      const outOfMoves = this.movesLeft === 0;
+      if (outOfTime || outOfMoves) {
+        this.failed = true;
+        this.pushLocal({
+          type: 'levelFailed',
+          index: this.levelIndex,
+          reason: outOfTime ? 'time' : 'moves',
+        });
+      }
     }
 
     // finale flourish: the last goal standing gets near-max assist
@@ -273,6 +317,13 @@ export class Director {
   private pushPearlCounter(): void {
     const p = this.pearlCounter;
     this.pushLocal({ type: 'pearlCounter', left: p.left, total: p.total });
+  }
+
+  private pushTimeLeft(): void {
+    const s = this.secondsLeft;
+    if (s === this.lastSeconds) return;
+    this.lastSeconds = s;
+    this.pushLocal({ type: 'timeLeft', seconds: s });
   }
 
   private pushLocal(e: SimEvent): void {

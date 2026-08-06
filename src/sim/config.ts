@@ -118,5 +118,13 @@ export const SIM = {
   BLAST_SETTLE_CONFIRM_TICKS: 24,
 
   RESPAWN_DELAY: 0.6,
+  /**
+   * The board's countdown, in fixed steps — 30 s at 60 Hz. This lived in the
+   * view as a decorative number until now; the README's own rule ("A limit
+   * enforced only in the view is not enforced", learned on the move budget)
+   * is why it is here instead. Hitstop freezes the sim, so it freezes the
+   * clock too — the player is not charged for the game's own freeze frames.
+   */
+  LEVEL_TICKS: 30 * 60,
   ASSIST_CONE_DEG: 28,
 } as const;
