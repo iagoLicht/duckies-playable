@@ -112,7 +112,10 @@ export const SIM = {
   // slow and deliberate: pop → nudge → blink → settle → hold → pop.
   BLAST_KNOCK: 150,      // px/s added at the blast centre…
   BLAST_KNOCK_EDGE: 70,  // …falling off linearly to this at the rim
-  BLAST_SETTLE_CONFIRM_TICKS: 45, // consecutive fully-static ticks before the pop
+  // consecutive fully-static ticks before the pop. Tuned by hand: 45 (0.75s)
+  // read as a hang, 0 popped before the stop registered — 0.4s is the beat
+  // where the eye catches "it stopped" and then gets the bang.
+  BLAST_SETTLE_CONFIRM_TICKS: 24,
 
   RESPAWN_DELAY: 0.6,
   ASSIST_CONE_DEG: 28,

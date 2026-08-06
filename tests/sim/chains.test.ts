@@ -26,8 +26,10 @@ const firstTick = (log: Stamped[], type: SimEvent['type']): number =>
  * down, then pops and detonates. A blast dooms every duck it NEWLY catches,
  * whatever its colour (user-locked change over the official): nudged, blinking,
  * and popping only once it is fully idle — settled and held still for the
- * confirmation period, never mid-slide. A duck already on a contact fuse keeps
- * that fuse, so a matched pair still pops together.
+ * confirmation period, never mid-slide. That stillness rule covers EVERY doomed
+ * duck (user-locked 2026-08-06): a contact match burns its full fuse AND then
+ * waits out its own motion, so a settled pair pops together while a duck still
+ * sliding at fuse-end holds its blast until it rests.
  *
  * The fuse is decremented on the same tick it is lit, exactly as the official's
  * tick() does (its fuse pass runs after contact resolution) — so a duck reads
@@ -61,20 +63,50 @@ describe('same-colour matches, fuses and chain blasts', () => {
     const a = w.spawnDuck('red', 300, 700);
     w.spawnDuck('red', 460, 700);
     w.launch(a.id, 900, 0);
-    const log = record(w, 200);
+    const log = record(w, 400);
 
     const matchTick = firstTick(log, 'duckMatched');
     expect(matchTick).toBeGreaterThanOrEqual(0);
     const pops = log.filter((s) => s.e.type === 'duckPopped');
     expect(pops).toHaveLength(2);
-    // both fuses were lit on the same tick, so both ducks pop on the same tick
+    // the knocked partner comes to rest well inside the fuse, so it keeps the
+    // classic timing: exactly one full fuse after contact, not a tick sooner
     expect(pops[0]!.tick).toBe(matchTick + FUSE);
-    expect(pops[1]!.tick).toBe(matchTick + FUSE);
+    // the shot itself is still riding its rebound when the fuse runs out — it
+    // holds its blast until it has fully stopped and sat still (see the
+    // 'never pops mid-glide' test for the exact hold)
+    expect(pops[1]!.tick).toBeGreaterThan(matchTick + FUSE);
     // ~1.5s of blinking, and nothing popped a moment earlier
     expect(FUSE / 60).toBeGreaterThan(1.4);
     expect(FUSE / 60).toBeLessThan(1.6);
     expect(log.filter((s) => s.e.type === 'blast')).toHaveLength(2);
     expect(w.ducks).toHaveLength(0);
+  });
+
+  it('a doomed duck never pops mid-glide: full stop plus a stillness hold first', () => {
+    const w = new World(1);
+    const a = w.spawnDuck('red', 300, 700);
+    w.spawnDuck('red', 460, 700);
+    w.launch(a.id, 900, 0);
+    // step by hand, tracking the launched duck's last tick in motion
+    w.events.length = 0;
+    let lastMove = -1;
+    let popTick = -1;
+    let matchTick = -1;
+    for (let tick = 0; tick < 400 && popTick < 0; tick++) {
+      w.step(SIM.DT);
+      if (!a.popping && (a.vx !== 0 || a.vy !== 0)) lastMove = tick;
+      for (const e of w.events.splice(0, w.events.length)) {
+        if (e.type === 'duckMatched' && e.id === a.id) matchTick = tick;
+        if (e.type === 'duckPopped' && e.id === a.id) popTick = tick;
+      }
+    }
+    expect(matchTick).toBeGreaterThanOrEqual(0);
+    expect(popTick).toBeGreaterThan(lastMove); // never mid-glide
+    // the pause the player sees between the duck resting and the bang
+    expect(popTick - lastMove).toBe(SIM.BLAST_SETTLE_CONFIRM_TICKS);
+    // and the blink still ran its full course first
+    expect(popTick).toBeGreaterThanOrEqual(matchTick + FUSE);
   });
 
   it('a matched duck is never re-flagged, however often it is hit', () => {
@@ -126,9 +158,12 @@ describe('same-colour matches, fuses and chain blasts', () => {
     const chainMatch = log.filter((s) => s.e.type === 'duckMatched' && (s.e as { id: number }).id === c.id);
     expect(chainMatch).toHaveLength(1);
     const blasts = log.filter((s) => s.e.type === 'blast');
-    // two from the pair (same tick), then one per caught duck as it settles
+    // two from the pair, then one per caught duck as it settles. The pair's
+    // pops stagger a few ticks apart here: the struck partner is still
+    // finishing its knocked slide when the shooter's fuse runs out, and every
+    // pop now waits for ITS duck to be fully at rest.
     expect(blasts).toHaveLength(4);
-    expect(blasts[0]!.tick).toBe(blasts[1]!.tick);
+    expect(blasts[1]!.tick).toBeGreaterThanOrEqual(blasts[0]!.tick);
     expect(chainMatch[0]!.tick).toBe(blasts[0]!.tick);
     // the knocked victims need their slide plus a full stillness hold before
     // they go off — staged, never instant
@@ -142,16 +177,17 @@ describe('same-colour matches, fuses and chain blasts', () => {
     const w = new World(1);
     // Straddles both pop points. Blast reach is pure centre distance (135), so
     // the barrel must sit inside both pop discs while staying clear of the lane
-    // the ducks run down — a direct hit would damage it as well. The struck duck
-    // is shot hard enough to rebound off the far wall and come most of the way
-    // back inside its fuse, putting the two pop points ~107 apart at (288.8, 700)
-    // and (396.1, 700); the barrel tucks under their midpoint, 115 below the lane
-    // (clear of DUCK_R + BARREL_R = 106) and ~127 from each pop point.
-    const barrel = w.spawnBarrel('wood', 342, 815, 3);
+    // the ducks run down — a direct hit would damage it as well. Pops land at
+    // each duck's REST position now (settle-gated), so the launch is kept just
+    // over POP_SPEED: a harder shot shoves its partner too far for any barrel
+    // spot to reach both rest points. The pair settles at (301.1, 700) and
+    // (452.6, 700); the barrel tucks under their midpoint, 109 below the lane
+    // (clear of DUCK_R + BARREL_R = 106) and ~133 from each pop point.
+    const barrel = w.spawnBarrel('wood', 377, 809, 3);
     const a = w.spawnDuck('red', 300, 700);
     w.spawnDuck('red', 393, 700);
-    w.launch(a.id, 900, 0);
-    record(w, 200);
+    w.launch(a.id, 132, 0);
+    record(w, 400);
     expect(barrel.hp).toBe(1); // one hit from each of the pair's two blasts
   });
 });

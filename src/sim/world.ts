@@ -179,24 +179,31 @@ export class World {
    * down to MATCH_FUSE_TICKS - 1 by the time the view first sees it.
    */
   private tickFuses(): void {
-    // popDuck splices, and its blast can flag ducks further along — snapshot
-    for (const d of [...this.ducks]) {
+    // A doomed duck is never popped mid-glide: whatever lit it, it keeps full
+    // physics while it blinks, and only detonates once it has been DEAD STILL
+    // (the step snaps sub-STOP_SPEED motion to exactly zero) for a whole
+    // confirmation hold — the player watches it flash, sees it come to rest,
+    // and only then does it go. Contact matches additionally burn their full
+    // fuse first, so a pair that was already sitting still keeps the classic
+    // 1.5s blink; a blast victim's blink lasts however long it takes to
+    // settle. The fuse keeps counting into the negatives meanwhile, which
+    // keeps the blink bands alternating however long that is, and drag
+    // guarantees every duck does come to rest.
+    //
+    // Decide-then-pop, in two passes: a pop's blast SHOVES its neighbours, so
+    // deciding in one pass would let the first pop of a settled same-colour
+    // pair knock its partner's hold back to zero — splitting a double-pop the
+    // real game renders on the same frame.
+    const due: Duck[] = [];
+    for (const d of this.ducks) {
       if (!d.matched || d.popping) continue;
-      d.matchFuse--; // drives the blink band; may run past 0 (see below)
-      if (d.popOnSettle) {
-        // A blast victim explodes ONLY when it is fully idle — dead still (the
-        // step snaps sub-STOP_SPEED motion to exactly zero) for a whole
-        // confirmation hold, the counter resetting the instant anything bumps
-        // it back into motion. Nothing else can pop it: its fuse keeps counting
-        // for the blink but never fires the shot out from under a moving duck,
-        // and drag guarantees it does come to rest.
-        d.settleTicks = d.vx === 0 && d.vy === 0 ? d.settleTicks + 1 : 0;
-        if (d.settleTicks >= SIM.BLAST_SETTLE_CONFIRM_TICKS) this.popDuck(d);
-        continue;
-      }
-      // contact-matched pairs are unchanged: pure fuse, settled or not, so a
-      // pair flagged on the same tick still pops on the same tick
-      if (d.matchFuse <= 0) this.popDuck(d);
+      d.matchFuse--; // drives the blink band; runs past 0 while settling
+      d.settleTicks = d.vx === 0 && d.vy === 0 ? d.settleTicks + 1 : 0;
+      const held = d.settleTicks >= SIM.BLAST_SETTLE_CONFIRM_TICKS;
+      if (held && (d.popOnSettle || d.matchFuse <= 0)) due.push(d);
+    }
+    for (const d of due) {
+      if (!d.popping) this.popDuck(d);
     }
   }
 
