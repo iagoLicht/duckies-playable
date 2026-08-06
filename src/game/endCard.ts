@@ -59,18 +59,22 @@ const RIBBON_CY = PANEL_TOP + 24;
 const TITLE_DY = -16;
 
 /**
- * The title arcs along the banner instead of sitting flat across it.
+ * How far the title's outer letters drop below its middle, in design px.
  *
- * MEASURED off the source art, not guessed: a probe walked ribbon-banner.png
- * (1004x338) column by column taking the band's top edge, and found it 41.5px
- * higher at the centre than at x=90/x=914 — a sagitta over an 824px span, which
- * solves to a circular arc of radius 2066px. Expressed as a fraction of the
- * texture width (2.058) so it survives any rescale of RIBBON_W.
+ * The arc is specified by RISE, not by the banner's radius, and that is a
+ * deliberate correction. A probe measured the banner's own curve — 41.5px of
+ * sagitta over an 824px span on the 1004px source, i.e. a circular arc of
+ * radius 2066px — and matching that radius exactly was the first attempt. It
+ * was geometrically faithful and looked FLAT, because a circle's rise grows
+ * with the SQUARE of the span: the title is barely half the banner's width, so
+ * it inherited under a third of the banner's visible curve (~11px, which reads
+ * as a straight line with slightly tilted end letters).
  *
- * The arc bulges UP, so the middle letters ride highest and the outer ones drop
- * away and tilt, exactly as the banner does.
+ * Setting the rise directly makes the title curve the way the banner LOOKS
+ * rather than the way it measures, and it holds that look at any title length,
+ * since the radius is re-solved per string from its own measured width.
  */
-const RIBBON_ARC_K = 2.058;
+const TITLE_ARC_RISE = 44;
 /** extra tracking between letters — arc text loses the font's own kerning */
 const TITLE_TRACKING = 2;
 /**
@@ -134,19 +138,26 @@ const backOut = (t: number): number => {
 const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
 
 /**
- * Lay a string along a circular arc of `radius`, apex-up, centred on (cx, cy).
+ * Lay a string along a circular arc, apex-up, so the middle letters ride
+ * highest and the outer ones drop away and tilt.
  *
- * One `Text` per glyph, each rotated to the arc's tangent — Pixi has no
- * text-on-a-path, and a bitmap-warped alternative would soften the face's
- * outline, which is the one thing the title cannot afford at this size.
+ * The arc is defined by `riseTarget` — how far the ends fall below the middle,
+ * in final rendered px — and the radius is solved from the string's own
+ * measured width. Specifying the rise rather than the radius is what keeps the
+ * curve looking the same whether the word is "YOU WIN!" or something longer;
+ * a fixed radius flattens out as the text gets shorter.
  *
- * The apex is raised by half the arc's own rise so the block's visual centre
- * lands on `cy`; without that, curving a previously flat title visibly drops it
- * down the banner.
+ * One `Text` per glyph, each rotated to the arc's tangent. Pixi has no
+ * text-on-a-path, and warping a bitmap would soften the face's outline, which
+ * is the one thing a title at this size cannot afford.
+ *
+ * The apex is raised by half the rise so the block's visual centre lands on
+ * `cy`; without it, curving a previously flat title visibly drops it down the
+ * banner.
  */
 function arcText(
   text: string, style: TextStyleOptions,
-  cx: number, cy: number, radius: number, tracking: number, maxWidth: number,
+  cx: number, cy: number, riseTarget: number, tracking: number, maxWidth: number,
 ): Container {
   const glyphs = [...text].map((ch) => new Text({ text: ch, style }));
   for (const g of glyphs) g.anchor.set(0.5);
@@ -154,13 +165,16 @@ function arcText(
   const advances = glyphs.map((g) => g.width + tracking);
   const total = advances.reduce((a, b) => a + b, 0) - tracking;
   // shrink-to-fit rather than clip. Applied to the finished container, so the
-  // arc's geometry is computed once at full size and simply scaled — the
-  // letters stay on the same curve instead of re-solving to a flatter one.
+  // arc is computed once at full size and simply scaled — the letters stay on
+  // the same curve instead of re-solving to a flatter one.
   const fit = Math.min(1, maxWidth / total);
 
-  // how far the ends fall below the apex, so the block can be re-centred
-  const half = Math.min(total / 2, radius);
-  const rise = radius - Math.sqrt(Math.max(0, radius * radius - half * half));
+  // solve the radius from the geometry we actually want. `rise` is pre-divided
+  // by `fit` so that after the shrink-to-fit scale the RENDERED rise is
+  // riseTarget, not something smaller.
+  const half = total / 2;
+  const rise = Math.max(1, riseTarget / fit);
+  const radius = (half * half + rise * rise) / (2 * rise);
 
   const box = new Container();
   // arc centre sits directly below the apex
@@ -236,8 +250,7 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
       fontFamily: HUD_FONT, fontSize: 82, fill: 0xffffff, align: 'center',
       stroke: { color: 0x9c3a5e, width: 12, join: 'round' },
     },
-    PANEL_CX, RIBBON_CY + TITLE_DY, RIBBON_W * RIBBON_ARC_K,
-    TITLE_TRACKING, TITLE_MAX_W,
+    PANEL_CX, RIBBON_CY + TITLE_DY, TITLE_ARC_RISE, TITLE_TRACKING, TITLE_MAX_W,
   );
 
   const ribbonBox = new Container();
