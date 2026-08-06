@@ -245,6 +245,37 @@ async function boot(): Promise<void> {
   if (import.meta.env.DEV) {
     (window as unknown as { __audio?: typeof scene.audio }).__audio = scene.audio;
   }
+  // Dev-only level picker: a floating dropdown to hop between levels freely —
+  // for phone playtesting, where there is no URL bar worth typing in. Uses the
+  // native <select> (best control mobile browsers have), swaps the board
+  // through the same loadLevel the campaign itself uses, and keeps ?level= in
+  // the URL so a refresh stays put. Statically dropped from the shipped ad.
+  if (import.meta.env.DEV) {
+    const { LEVELS } = await import('./sim/levels');
+    const picker = document.createElement('select');
+    picker.style.cssText =
+      'position:fixed;top:8px;right:8px;z-index:10;font:700 14px system-ui;' +
+      'padding:6px 8px;border:2px solid #35304a;border-radius:10px;' +
+      'background:rgba(255,255,255,.92);color:#35304a;opacity:.85';
+    LEVELS.forEach((lv, i) => {
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = `${i + 1}. ${lv.name}`;
+      picker.appendChild(o);
+    });
+    picker.value = String(Math.min(startLevel, LEVELS.length - 1));
+    picker.onchange = () => {
+      const i = Number(picker.value);
+      scene.loadLevel(i);
+      history.replaceState(null, '', `?level=${i + 1}`);
+    };
+    document.body.appendChild(picker);
+    // the campaign advances levels on its own — keep the dropdown honest
+    setInterval(() => {
+      const i = String(scene.director.levelIndex);
+      if (document.activeElement !== picker && picker.value !== i) picker.value = i;
+    }, 500);
+  }
 }
 
 boot().catch((e: unknown) => {
