@@ -62,6 +62,7 @@ const WEBP = [
   { src: 'ui/btn-play-hero.png', q: 75 },
   { src: 'ui/hud-currency-plate.png', q: 75 },
   { src: 'ui/popup-body-tall.png', q: 75 },
+  { src: 'ui/btn-green-large.png', q: 78 },                         // end-card CTA (578x227, no baked label)
   { src: 'icons/ribbon-pink.png', q: 70 },
   { src: 'vfx/impact-star.png', q: 75 },
   { src: 'vfx/dome.png', q: 75 },

@@ -245,6 +245,27 @@ async function boot(): Promise<void> {
   if (import.meta.env.DEV) {
     (window as unknown as { __audio?: typeof scene.audio }).__audio = scene.audio;
   }
+  // Dev-only end-card preview: ?card=win / ?card=lose pops the card straight
+  // up over whatever board is loaded, so the two screens can be looked at
+  // without playing to them. Statically dropped from the shipped ad.
+  if (import.meta.env.DEV) {
+    const which = new URLSearchParams(location.search).get('card');
+    if (which === 'win' || which === 'lose') {
+      const { loadEndCardTextures, showEndCard } = await import('./game/endCard');
+      const tex = await loadEndCardTextures();
+      const log = (what: string) => (): void => console.log(`end card: ${what}`);
+      showEndCard(app, tex, which === 'win'
+        ? {
+            title: 'YOU WIN!', buttonLabel: 'NEXT LEVEL', storeLink: true,
+            onButton: log('next level'), onStore: log('store'),
+          }
+        : {
+            title: 'YOU LOST', buttonLabel: 'PLAY NOW', storeLink: false,
+            onButton: log('store'), onStore: log('store'),
+          });
+    }
+  }
+
   // Dev-only level picker: a floating dropdown to hop between levels freely —
   // for phone playtesting, where there is no URL bar worth typing in. Uses the
   // native <select> (best control mobile browsers have), swaps the board
