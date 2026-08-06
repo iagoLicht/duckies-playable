@@ -56,10 +56,12 @@ const RIBBON_CY = PANEL_TOP + 24;
 const TITLE_DY = -16;
 
 const BUTTON_W = 430;
-const BUTTON_CY = PANEL_TOP + 300;
+const BUTTON_CY = PANEL_TOP + 275;
 /** the button art carries a bottom bevel, so the label rides above centre */
 const LABEL_DY = -12;
-const STORE_CY = PANEL_TOP + 378;
+/** clear of the button's own drop shadow above, and of the panel rim below —
+ *  the button spans PANEL_TOP+191..+359 at this width */
+const STORE_CY = PANEL_TOP + 392;
 
 const SCRIM_FADE = 0.25;
 const PANEL_RISE = 0.45;
