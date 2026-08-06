@@ -5,8 +5,9 @@
 **Status:** awaiting review
 
 Turns the ten-level campaign into a **two-beat playable ad**: one board the
-viewer wins, one board the clock takes away from them, and a card at each end
-carrying a CTA and a store link.
+viewer wins, one board the clock takes away from them, and a card at each end.
+The first card sends them onward into the second board; the second card sends
+them to the store and ends the run.
 
 This closes the README's biggest shipping gap — *"No end card / CTA. Clearing
 the last level just sits there."*
@@ -20,8 +21,9 @@ the last level just sits there."*
 | E1 | The ad is a scripted two-beat story, not a campaign run: win one board, lose the next. |
 | E2 | **Losing is the clock running out**, and it is terminal — it ends the run and shows the lose card. |
 | E3 | Beat one is **level 9 (The Gauntlet)**; beat two is **level 10 (The Golden Pearl)**. |
-| E4 | The win card's button reads **NEXT LEVEL** and loads beat two. The lose card's button reads **PLAY AGAIN** and restarts at beat one. |
-| E5 | Both cards carry a **store link separate from the button**. |
+| E4 | The win card's button reads **NEXT LEVEL** and loads beat two. |
+| E5 | The lose card is **terminal**: one button, it opens the store, and there is no way back into the game. |
+| E5a | The win card also carries a **store link separate from its button**, since its button continues play rather than installing. |
 | E6 | Art: `popup-body-tall` as a big square panel, `ribbon-banner` as the title plate, `btn-green-large` as the button. |
 | E7 | Level 9 is made reliably winnable by dropping its **hp3 keystone barrel to hp2** — the "two stripes to one stripe" change. |
 | E8 | Level 10 is made **provably unwinnable inside 30 s**, not merely unlikely. |
@@ -53,29 +55,44 @@ The store URL is unchanged: `https://play.google.com/store/apps/details?id=com.c
 ```
 boot ──→ BEAT 1: level 9 ──cleared──→ [ YOU WIN! ]
               ↑                        button: NEXT LEVEL
-              │                              │
-              │ (quiet restart on fail)      ↓
-              │                        BEAT 2: level 10
-              │                              │
-              │                        clock hits 0
+              │                        link:   store
+              │ (quiet restart on fail)      │
               │                              ↓
-              └───── button: PLAY AGAIN ─ [ YOU LOST ]
+              └──────────────────────  BEAT 2: level 10
+                                              │
+                                        clock hits 0
+                                              ↓
+                                        [ YOU LOST ]
+                                        button: PLAY NOW → store
+                                        TERMINAL — no way back
 ```
 
-### 2.1 Both failure modes of the script are handled
+### 2.1 Beat two always ends the run
 
-A script that assumes the player cooperates is not a script. Two guards:
+The asymmetry is deliberate and is the whole shape of the ad. **Beat one is a
+door** — you clear it and walk through to the next board. **Beat two is a wall** —
+however it resolves, the run is over and the only thing left to do is install.
+
+That gives the flow exactly three outcomes, and every one of them is handled:
+
+| where | outcome | what happens |
+| --- | --- | --- |
+| beat one | cleared | win card → NEXT LEVEL → beat two |
+| beat one | failed | **quiet restart of the board** — no card |
+| beat two | failed (expected) | lose card → store. Terminal. |
+| beat two | cleared (unlikely) | win card → store. Terminal. |
 
 **Beat one cannot be lost.** If the clock expires or the budget is spent on
-level 9, the board **quietly restarts** — same behaviour the game has today
-(`scene.ts:1258`), no card. The lose card is reachable only from beat two.
+level 9, the board **quietly restarts** — the behaviour the game already has
+(`scene.ts:1258`), minus the card. The lose card is reachable only from beat two.
 E7 makes this path rare; the guard makes it invisible when it happens.
 
-**Beat two can be won.** E8 makes that vanishingly unlikely, but "vanishingly"
-is not "never" and a card that fails to appear is a dead ad. If level 10 is
-cleared, the **win card** shows with its button reading **PLAY AGAIN** (there is
-no next level to advance to) and the run loops to beat one. One label swap, no
-third card.
+**Beat two can be won.** E8 makes that vanishingly unlikely, but "vanishingly" is
+not "never", and an ad whose end card can fail to appear is a dead ad. If level
+10 is cleared, the **win card** shows — but with no next level to advance to, its
+button becomes the store CTA and the run ends there, exactly like the lose path.
+One label-and-action swap, no third card, and no branch where the viewer is left
+with nothing to tap.
 
 ### 2.2 Where the script lives
 
@@ -94,8 +111,22 @@ rather than scattered as level-index comparisons through `scene.ts`. Adding,
 reordering or reskinning beats is then a one-line edit.
 
 `GameScene` asks `flow` what to do on `levelCleared` / `levelFailed` and gets
-back one of: `advance`, `restart`, `showWin`, `showLose`. The scene keeps owning
-pixels; the flow owns the story.
+back a plain description of the next move:
+
+```ts
+type Outcome =
+  | { kind: 'restart' }                       // beat one failed — no card
+  | { kind: 'advance'; level: number }        // straight into the next beat
+  | { kind: 'card'; title: string; buttonLabel: string;
+      buttonAction: 'advance' | 'store'; storeLink: boolean };
+```
+
+The card is told *what to say and what its button does*; it never asks which
+level it is on. That is what keeps the three outcomes of §2.1 in one readable
+table in `flow.ts` instead of spread across `scene.ts` as index comparisons, and
+it is why "beat two cleared" costs a label swap rather than a new code path.
+
+The scene keeps owning pixels; the flow owns the story.
 
 ---
 
@@ -247,11 +278,27 @@ Drawn in Pixi in the 720×1280 design space, bottom to top:
 3. **Title plate** — `ribbon-banner` (1004×338) across the panel top, downscaled;
    the manifest flags it as the pack's heaviest UI asset.
 4. **Title text** — **"YOU WIN!"** / **"YOU LOST"** in Cherry Bomb on the ribbon.
-5. **Button** — `btn-green-large` (578×227), green on both cards, with
-   **"NEXT LEVEL"** / **"PLAY AGAIN"** drawn over it. The art ships no baked
-   label.
-6. **Store link** — small text beneath the button, the only other tap target.
+5. **Button** — `btn-green-large` (578×227), green on both cards. The art ships
+   no baked label, so the text is drawn over it in Cherry Bomb.
+6. **Store link** — small text beneath the button. **Win card only**; on the
+   lose card the button already *is* the store, and a second path to the same
+   place is noise.
 7. **No close button**, carried forward from the earlier spec's D7.
+
+### 5.1.1 What differs between the two
+
+| | WIN card | LOSE card |
+| --- | --- | --- |
+| ribbon title | **YOU WIN!** | **YOU LOST** |
+| button label | **NEXT LEVEL** | **PLAY NOW** |
+| button action | load beat two | open the store |
+| store link under it | yes | no — the button is the store |
+| terminal? | no (except after beat two — §2.1) | **yes** |
+| entrance sound | `pointWhoosh` | silent |
+
+`PLAY NOW` is the label carried over from the earlier spec's §3.2 CTA, so the
+build says one thing in one voice. It is a one-line change if a different word
+tests better.
 
 ### 5.2 The panel's 9-slice insets must be measured, not read
 
@@ -289,12 +336,13 @@ runs synchronously inside the real user gesture, so popup blockers stay quiet.
 This is the reason the cards are Pixi rather than a DOM overlay, carried forward
 from the earlier spec's §4.3.
 
-### 5.5 One noted inversion
+### 5.5 Why the button's label always matches its action
 
-Ad convention puts the **install** on the big button and "play again" on a small
-one. E4/E5 invert that: the big button continues play and the store is a text
-link. This is the user's explicit call, recorded here so it reads as a decision
-rather than an oversight.
+The win card's button continues play and says so; the lose card's button opens
+the store and says so. A button reading "PLAY AGAIN" that silently opened the
+store was considered and **rejected**: it is deceptive, and ad networks and app
+stores reject playables for exactly that mismatch. Wherever the two cards differ,
+they differ in the label as well as the action.
 
 ---
 
@@ -306,7 +354,13 @@ No new clips. Two existing mappings, per the earlier spec's §5.1 table:
 | --- | --- |
 | win card entrance | `pointWhoosh` (`win-whoosh`), on the panel beat |
 | lose card entrance | **silent** |
-| either button, and the store link | `ui-click` |
+| either card's button, and the win card's store link | `ui-click` |
+
+The lose card's button plays `ui-click` and *then* opens the store. Since
+`window.open` must run synchronously inside the gesture (§5.4), the sound is
+fired first and the tab opened immediately after, in the same handler — not
+sequenced behind a callback, which would move the `open` out of the gesture and
+straight into a popup blocker.
 
 The lose card is silent by the same reasoning already settled: the pack ships no
 lose sting (`LoseTitle_Enter` is priority `nice` with no extracted clip), and
@@ -336,9 +390,13 @@ README open item (*"`ui-click` has no button to sit on yet"*).
 6. **Level 9 is winnable in 30 s (E7)** — the same harness, asserting a clear
    rate above an agreed floor. The floor is set from §4.1's measurement, not
    invented here.
-7. **Flow** — `flow.ts` unit tests: beat one failing yields `restart`, beat two
-   failing yields `showLose`, beat two clearing yields `showWin` with the
-   PLAY AGAIN label, and the loop returns to beat one.
+7. **Flow** — `flow.ts` unit tests, one per row of §2.1's outcome table: beat one
+   cleared yields a card whose button advances; beat one failed yields
+   `restart` and **never** a card; beat two failed yields the YOU LOST card with
+   `buttonAction: 'store'`; beat two cleared yields the YOU WIN! card *also* with
+   `buttonAction: 'store'`. Plus the property that matters most — **every
+   outcome of beat two is terminal**, asserted directly rather than inferred from
+   the four cases.
 8. **Determinism** — unchanged: same seed, same event sequence.
 
 **Existing gates that must stay green:** the full suite, the per-level
