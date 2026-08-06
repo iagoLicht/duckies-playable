@@ -195,10 +195,19 @@ And `levelFailed` grows a reason:
 | { type: 'levelFailed'; index: number; reason: 'time' | 'moves' }
 ```
 
-Both are additive, like `duckBumped` before them. Existing tests read events by
-`.filter(e => e.type === ...)` and none asserts an exact event shape or a total
-event count, so this breaks nothing — same reasoning, and the same grep, as the
-earlier spec's §2.5.
+Both are additive, like `duckBumped` before them.
+
+**Correction, 2026-08-06 (post-implementation).** This section originally claimed
+that *"none asserts an exact event shape"*, carrying the earlier spec's §2.5
+reasoning forward. That was wrong, and the build proved it:
+`tests/sim/director.test.ts:322` asserts the whole payload with
+`toEqual([{ type: 'levelFailed', index }])`, so widening `levelFailed` broke it
+on all ten levels. The fix was one field and a comment.
+
+The lesson is about the reasoning, not the line: §2.5's grep was for
+`.filter(e => e.type === X)`, which finds the readers but not the asserters. An
+additive *variant* is safe; an additive *field on an existing variant* is not, and
+needs a search for `toEqual` against event arrays as well.
 
 ---
 
