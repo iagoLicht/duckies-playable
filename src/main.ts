@@ -4,6 +4,7 @@ import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
 // pipes — a dynamic import after init leaves renderPipes['spine'] undefined in
 // dev (the single-file build masked this by evaluating everything up front)
 import { GameScene } from './game/scene';
+import { FIRST_BEAT } from './game/flow';
 
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
@@ -223,7 +224,8 @@ async function boot(): Promise<void> {
   // screenshot harness, which needs to reach level 7 without playing six levels.
   // DEV only: `import.meta.env.DEV` is statically false in the build, so the
   // shipped ad always opens on level 1 and cannot be deep-linked past it.
-  let startLevel = 0;
+  // the ad opens on its first beat, not on level 1 — see src/game/flow.ts
+  let startLevel = FIRST_BEAT;
   if (import.meta.env.DEV) {
     const wanted = Number(new URLSearchParams(location.search).get('level'));
     if (Number.isFinite(wanted) && wanted >= 1) startLevel = Math.floor(wanted) - 1;

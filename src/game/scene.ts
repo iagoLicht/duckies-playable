@@ -9,6 +9,8 @@ import type { AimPreview } from '../sim/trajectory';
 import type { Barrel, Clam, Colour, Duck, SimEvent } from '../sim/types';
 import { loadSkeleton, makeSpine } from '../engine/spineLoader';
 import { Audio, impactGain } from './audio';
+import { outcomeFor, STORE_URL, type Outcome } from './flow';
+import { loadEndCardTextures, showEndCard, type EndCardTextures } from './endCard';
 
 import duckySkelUrl from '../assets/entities/ducky/ducky.skel';
 import duckyAtlasText from '../assets/entities/ducky/ducky.atlas?raw';
@@ -660,6 +662,10 @@ export class GameScene {
   /** the sound layer. Built once and NEVER rebuilt, so a mute survives a level
    *  swap and the decoded buffers are paid for exactly once per session. */
   readonly audio = new Audio();
+  /** end-card art, loaded once at boot with everything else */
+  private endCardTex!: EndCardTextures;
+  /** the card currently up, if any — a second must never stack on it */
+  private endCard: Container | null = null;
 
   constructor(private app: Application, private seed: number, startLevel = 0) {
     // clamped so a stray ?level= can never ask the Director for a level that
@@ -681,6 +687,7 @@ export class GameScene {
     this.starTex = await loadTexture(starUrl);
     this.blobTex = await loadTexture(blobUrl);
     this.pearlTex = await loadTexture(pearlUrl);
+    this.endCardTex = await loadEndCardTextures();
 
     // aim UI: official aim-dot sprites + the red contact crescent, all layered
     // UNDER the ducks (the official parks dots/cross at depth 6-8.5, ducks at 10+,
@@ -1252,34 +1259,18 @@ export class GameScene {
         console.log(`level ${e.index + 1} CLEARED with ${e.movesLeft} moves to spare`);
         this.celebrate();
         this.audio.play('pointWhoosh');
-        const next = e.index + 1;
-        // the campaign rolls straight on; the last level just stays cleared,
-        // holding the celebration until an end card exists to take over.
-        // Bound to THIS director: if the board is swapped by hand (dev level
-        // picker) before the delay elapses, the stale hop must not fire and
-        // yank the player off the level they just chose.
-        const dir = this.director;
-        if (next < LEVELS.length) {
-          this.after(LEVEL_ADVANCE_DELAY, () => {
-            if (this.director === dir) this.loadLevel(next);
-          });
-        }
+        this.applyOutcome(outcomeFor(e.index, true), LEVEL_ADVANCE_DELAY, this.director);
         break;
       }
       case 'levelFailed': {
-        console.log(`level ${e.index + 1} FAILED — out of moves`);
+        console.log(`level ${e.index + 1} FAILED — out of ${e.reason}`);
         // DELIBERATELY SILENT. The event map lists LoseTitle_Enter but at
         // priority `nice`, and no fail clip was extracted from the bank — there
         // is no studio lose sting to play. Pitching some other clip down to fake
         // one would be inventing a sound the game does not have, so the cold
         // ring carries the beat on its own.
         this.lament();
-        // a miss costs nothing but the retry — same board, fresh budget.
-        // Same stale-hop guard as the cleared path above.
-        const failedDir = this.director;
-        this.after(LEVEL_RETRY_DELAY, () => {
-          if (this.director === failedDir) this.loadLevel(e.index);
-        });
+        this.applyOutcome(outcomeFor(e.index, false), LEVEL_RETRY_DELAY, this.director);
         break;
       }
       default:
@@ -1295,7 +1286,59 @@ export class GameScene {
    * are sub-second and their own ticker callbacks dispose of them, whereas
    * destroying them here would pull the rug out mid-tween.
    */
+  /**
+   * Act on what the ad script decided. The scene does not know which board is
+   * which beat, or whether an ending is terminal — flow.ts owns that, and this
+   * only turns its answer into pixels.
+   *
+   * Bound to `dir`, the Director that produced the result: if the board is
+   * swapped by hand (the dev level picker) before the delay elapses, a stale
+   * decision must not yank the player off the level they just chose.
+   */
+  private applyOutcome(o: Outcome, delay: number, dir: Director): void {
+    this.after(delay, () => {
+      if (this.director !== dir) return;
+      switch (o.kind) {
+        case 'restart':
+          this.loadLevel(dir.levelIndex);
+          break;
+        case 'advance':
+          this.loadLevel(o.level);
+          break;
+        case 'card': {
+          if (this.endCard) break; // never stack two cards
+          // ui-click first, then open — window.open MUST run synchronously
+          // inside the gesture or the popup blocker eats it
+          const openStore = (): void => {
+            this.audio.play('uiClick');
+            window.open(STORE_URL, '_blank');
+          };
+          this.endCard = showEndCard(this.app, this.endCardTex, {
+            title: o.title,
+            buttonLabel: o.buttonLabel,
+            storeLink: o.storeLink,
+            onButton: () => {
+              if (o.buttonAction === 'store') {
+                openStore();
+                return;
+              }
+              this.audio.play('uiClick');
+              if (o.advanceTo !== null) this.loadLevel(o.advanceTo);
+            },
+            onStore: openStore,
+          });
+          break;
+        }
+      }
+    });
+  }
+
   loadLevel(index: number): void {
+    // the card belongs to the board that raised it
+    if (this.endCard) {
+      this.endCard.destroy({ children: true });
+      this.endCard = null;
+    }
     // nothing from the old board may bleed over the new one. Safe against the
     // celebration too: pointWhoosh is 0.39s and the swap is 1.8s behind it.
     this.audio.stopAll();
