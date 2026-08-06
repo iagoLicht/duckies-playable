@@ -90,7 +90,10 @@ const main = async () => {
     const level = LEVELS[index];
     const runs = [];
     for (let seed = 1; seed <= SEEDS; seed++) {
-      runs.push(playLevel(index, seed, { unlimitedMoves: true }));
+      // both limits off: this harness EXISTS to choose the budget, so it cannot
+      // be run under one, and a live clock would truncate the shot-count
+      // percentiles it reads at whatever the bot managed in thirty seconds
+      runs.push(playLevel(index, seed, { unlimitedMoves: true, unlimitedTime: true }));
     }
     const wins = runs.filter((r) => r.won);
     const shots = wins.map((r) => r.shots).sort((a, b) => a - b);

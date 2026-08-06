@@ -32,18 +32,6 @@ export class Director {
   failed = false;
   finaleArmed = false;
   movesLeft: number;
-  /**
-   * TEST AFFORDANCE, NOT A GAMEPLAY ONE. Freezes the countdown where it stands.
-   * Nothing in src/ sets it and the view has no path to it — it exists so a
-   * harness can ask a question the clock would otherwise answer on its behalf:
-   * playthrough.test.ts gates board SOLVABILITY ("can this be cleared at all?")
-   * and tune-levels.mjs measures shot-count percentiles, and neither is asking
-   * "does the distracted-thumb bot beat thirty seconds". It is the twin of
-   * bot.ts's existing `unlimitedMoves`, which suspends the other limit for
-   * exactly that reason. Raising SIM.LEVEL_TICKS to make those suites green was
-   * the rejected alternative: it would tune the ad's pacing to suit the bot.
-   */
-  untimed = false;
   private destroyed = 0;
   /** pearls that have REACHED the HUD — spilled-but-still-flying ones don't count */
   private pearlsCollected = 0;
@@ -53,12 +41,22 @@ export class Director {
   /** shots already fired whose move has not been debited yet (same-frame guard) */
   private pendingLaunches = 0;
   /** fixed steps left on the board's countdown — see SIM.LEVEL_TICKS */
-  private ticksLeft = SIM.LEVEL_TICKS;
+  private ticksLeft: number;
   /** the last whole second published, so `timeLeft` only fires on a change */
   private lastSeconds = -1;
 
-  constructor(seed: number, levelIndex = 0) {
+  /**
+   * `ticks` is the board's countdown, and it is a constructor parameter rather
+   * than a settable field so the clock is DATA, not a mode: there is no switch
+   * to flip mid-level, nothing the view (or `window.__scene.director`) can reach
+   * to turn the limit off, and "the shipped game always runs the real clock" is
+   * true by construction instead of by comment. Harnesses that must outlast it
+   * pass `Infinity`; the reasoning for when that is legitimate lives with the
+   * harness, in tests/sim/bot.ts.
+   */
+  constructor(seed: number, levelIndex = 0, ticks: number = SIM.LEVEL_TICKS) {
     this.levelIndex = levelIndex;
+    this.ticksLeft = ticks;
     const def = LEVELS[levelIndex];
     if (!def) throw new Error(`no level at index ${levelIndex}`);
     this.level = def;
@@ -77,7 +75,8 @@ export class Director {
     };
   }
 
-  /** the budget is spent when everything already fired has been paid for */
+  /** the slingshot bars on either limit — budget spent (once everything fired is
+   *  paid for) or clock expired — and on a level already decided */
   private syncBlocked(): void {
     this.slingshot.blocked =
       this.movesLeft - this.pendingLaunches <= 0 ||
@@ -155,7 +154,7 @@ export class Director {
 
     // the clock only runs while the level is live, so a decided board is not
     // left counting down behind a transition
-    if (!this.untimed && !this.won && !this.failed && this.ticksLeft > 0) {
+    if (!this.won && !this.failed && this.ticksLeft > 0) {
       this.ticksLeft--;
       this.pushTimeLeft();
     }

@@ -41,11 +41,18 @@ export interface BotOpts {
    */
   unlimitedMoves?: boolean;
   /**
-   * Ignore the board's 30 s countdown (default true) — `Director.untimed`. Same
-   * argument as `unlimitedMoves`: the bot fires roughly every 2 s, so thirty
-   * seconds is about thirteen shots, and both callers here routinely need more
-   * than that. Leaving the clock running would turn the solvability gate and the
-   * budget tuner into measurements of the BOT's pace instead of the board's.
+   * Run the board with no countdown (`Director`'s `ticks` = Infinity).
+   *
+   * DEFAULTS FALSE — unlike `unlimitedMoves` — and the asymmetry is deliberate.
+   * The bot fires about every 2 s, so SIM.LEVEL_TICKS is roughly thirteen shots
+   * and half the campaign needs more; the solvability gate and the budget tuner
+   * would otherwise be measuring the BOT's pace instead of the board's, so both
+   * pass `true` explicitly. But the tests still to be written are the opposite
+   * case — "is this board winnable in thirty seconds" — and those must fail when
+   * the board is too slow. A default of true would hand them a green result for
+   * a limit that was never applied, which is the exact failure this whole change
+   * exists to remove. Opting OUT of a limit is the thing that should have to be
+   * spelled out at the call site.
    */
   unlimitedTime?: boolean;
   /** sim-seconds before the run is abandoned */
@@ -58,13 +65,12 @@ const HUGE_BUDGET = 1e9;
 
 export function playLevel(levelIndex: number, seed: number, opts: BotOpts = {}): BotStats {
   const unlimitedMoves = opts.unlimitedMoves ?? true;
-  const unlimitedTime = opts.unlimitedTime ?? true;
+  const unlimitedTime = opts.unlimitedTime ?? false;
   const maxSeconds = opts.maxSeconds ?? 150;
   const maxShots = opts.maxShots ?? 120;
 
   const rng = mulberry32(seed * 7919 + 1);
-  const dir = new Director(seed, levelIndex);
-  dir.untimed = unlimitedTime;
+  const dir = new Director(seed, levelIndex, unlimitedTime ? Infinity : SIM.LEVEL_TICKS);
   dir.start();
   const goals = dir.level.barrels.length + dir.level.clams.length;
   const budget = dir.level.moves;

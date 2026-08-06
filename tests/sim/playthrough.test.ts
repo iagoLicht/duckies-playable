@@ -6,11 +6,14 @@ import { LEVELS } from '../../src/sim/levels';
  * The per-level SOLVABILITY gate.
  *
  * Every board in the campaign must be beatable by the distracted-thumb bot in
- * tests/sim/bot.ts, on every seed. The bot runs with the move budget effectively
- * disabled: the question this gate answers is "can this board be cleared at
- * all?", NOT "is the shipped `moves` value winnable" — that is a tuning decision,
- * made from the shot-count percentiles printed below and by
- * `node tests/tools/tune-levels.mjs`.
+ * tests/sim/bot.ts, on every seed. The bot runs with BOTH limits disabled — the
+ * move budget and the 30 s clock: the question this gate answers is "can this
+ * board be cleared at all?", NOT "is the shipped `moves` value winnable" or "is
+ * it winnable in thirty seconds". Those are tuning decisions, made from the
+ * shot-count percentiles printed below and by `node tests/tools/tune-levels.mjs`.
+ * Measured at the time the clock landed, only levels 0, 2, 5, 8 and 9 are
+ * bot-clearable inside it, so leaving it running here would turn a solvability
+ * gate into a pacing gate and hide real level breakage behind timeouts.
  *
  * A level that fails here is broken level data (an unreachable goal, a clam
  * walled off from every lane, a board that cannot generate a blast), not a
@@ -50,7 +53,7 @@ describe('campaign playthrough — every level is solvable', () => {
     it(`level ${index} "${level.name}": ${SEEDS_PER_LEVEL} bot runs all clear it`, async () => {
       const runs: BotStats[] = [];
       for (let seed = 1; seed <= SEEDS_PER_LEVEL; seed++) {
-        runs.push(playLevel(index, seed, { unlimitedMoves: true }));
+        runs.push(playLevel(index, seed, { unlimitedMoves: true, unlimitedTime: true }));
         if (seed % YIELD_EVERY === 0) await new Promise((r) => setTimeout(r, 0));
       }
 
