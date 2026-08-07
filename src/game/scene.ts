@@ -98,9 +98,9 @@ const GLOW_FADE = 0.12;
  * spin all still have track 0 whenever nobody is aiming.)
  */
 const T_SPAWN = 22;
-// official spawn stagger: one duck view per 55ms, each entering with a
-// 300ms Back.easeOut scale-up from ~zero plus a small white star splash
-const SPAWN_STAGGER = 0.055;
+// a spawning duck enters with a 300ms Back.easeOut scale-up from ~zero plus a
+// small white star splash. (The official also staggered the views 55ms apart;
+// we don't — see drainSpawnQueue.)
 const SPAWN_SCALE_TIME = 0.3;
 /** a random settled duck dances every 2.8s (official idle-flavor timer) */
 const DANCE_PERIOD = 2.8;
@@ -183,8 +183,6 @@ const SPLASH_TIME = 0.3;        // f127: gone
 const SPLASH_CHIPS = 6;
 
 // ── pop feel, lifted from the official example (decomp GameScene.onPop) ──────
-/** star tint on a pop: their warm-white `Yn(..., 16773304)` burst */
-const POP_STAR_TINT = 0xffe9b8;
 /** additive flash: their duck-tinted `foam` image, 30 -> 70 px over 220ms QuadOut */
 const FLASH_R0 = 15, FLASH_R1 = 35, FLASH_TIME = 0.22, FLASH_ALPHA = 0.75;
 /** their `time2.freeze(scene, 40)` — 40ms of dead sim while the vfx play on */
@@ -619,10 +617,8 @@ export class GameScene {
   private trailPool: Sprite[] = [];
   /** the pack's noisy motion-trail streak (see WAKE_ASPECT) */
   private trailTex!: Texture;
-  /** sim ducks awaiting their staggered spawn view (official drainSpawnQueue) */
+  /** sim ducks whose view has not been built yet (official drainSpawnQueue) */
   private spawnQueue: Duck[] = [];
-  /** seconds until the next queued spawn view may appear */
-  private spawnTimer = 0;
   /** duck ids still inside the spawn scale-up (scale is theirs until it ends) */
   private spawning = new Set<number>();
   private danceTimer = 0;
@@ -849,7 +845,7 @@ export class GameScene {
       }
     }
     this.drainEvents();
-    this.drainSpawnQueue(dt);
+    this.drainSpawnQueue();
     this.tickTimer(dt);
     this.tickDance(dt);
     // one trajectory probe per frame — the rings and the aim UI both read it
@@ -1355,7 +1351,6 @@ export class GameScene {
       this.hand.visible = index === 0; // the tutorial only greets level 1
     }
     this.spawnQueue.length = 0;
-    this.spawnTimer = 0;
     this.spawning.clear();
     this.pearlFlights.clear();
     this.setTimer(LEVEL_SECONDS, true);
@@ -1393,20 +1388,21 @@ export class GameScene {
     this.drainEvents();
   }
 
-  /** Take one duck off the spawn queue per stagger period and build its view. */
-  private drainSpawnQueue(dt: number): void {
-    this.spawnTimer -= dt;
-    while (this.spawnTimer <= 0 && this.spawnQueue.length > 0) {
-      const d = this.spawnQueue.shift()!;
-      // every dequeue costs a slot, live or not, exactly like the official's
-      // unconditional 55ms delayedCall — so the cadence never bunches up
-      this.spawnTimer = SPAWN_STAGGER;
+  /**
+   * Build a view for every duck queued this frame — the whole batch arrives on
+   * one beat, matching the director, which now spawns the owed ducks together
+   * rather than one per RESPAWN_DELAY. The 55ms-per-duck stagger this used to
+   * run (the official's enqueueSpawn cadence) would have smeared that single
+   * beat back out across a fifth of a second. The scale-up in tickSpawns is
+   * what still makes an arrival read as an arrival.
+   */
+  private drainSpawnQueue(): void {
+    for (const d of this.spawnQueue.splice(0, this.spawnQueue.length)) {
       // popped while still queued (a blast can doom a viewless duck), or a view
       // somehow already exists: drop it silently
       if (!this.director.world.ducks.includes(d) || this.duckViews.has(d.id)) continue;
       this.addDuck(d);
     }
-    if (this.spawnQueue.length === 0 && this.spawnTimer < 0) this.spawnTimer = 0;
   }
 
   private addDuck(d: Duck): void {
@@ -2337,23 +2333,17 @@ export class GameScene {
   }
 
   /**
-   * Level cleared. No end-card and no transition — a later change owns those;
-   * this only has to make the state unmistakable: a staggered wash of stars
-   * over the tub and a longer version of the pop's own camera shake.
+   * Level cleared: a longer version of the pop's own camera shake, and nothing
+   * else. This used to also bloom a ring of eight big stars over the tub, fired
+   * 70 ms apart around a 210x250 ellipse at k 1.3 — but a burst is an IMPACT
+   * mark, and these had no impact under them: they landed on open water, at
+   * ~150px each (bigger than a duck), in the pop's warm white and the clam's
+   * pink, and lingered as a scatter of spiky blobs with nothing to explain
+   * them. Removed 2026-08-07 at the user's request. The win card carries the
+   * beat now, which is what it is for.
    */
   private celebrate(): void {
     this.shake = SHAKE_TIME * 4;
-    // a ring of stars blooming outward from the middle of the tub, alternating
-    // the pop's warm white with the clam's pink
-    for (let i = 0; i < 8; i++) {
-      this.after(i * 0.07, () => {
-        const a = (i / 8) * Math.PI * 2 + 0.4;
-        this.burst(
-          DESIGN_W / 2 + Math.cos(a) * 210, 740 + Math.sin(a) * 250,
-          i % 2 === 0 ? POP_STAR_TINT : CLAM_TINT, 1.3,
-        );
-      });
-    }
   }
 
   /**
