@@ -115,6 +115,14 @@ export class Director {
       this.world.spawnBarrel('wood', b.x, b.y, b.hp, b.golden ?? false);
     }
     for (const c of this.level.clams) this.world.spawnClam(c.x, c.y, c.skin ?? 'normal');
+    // THE BOARD OPENS FULL. Several levels author fewer ducks than they want
+    // afloat (4 authored against targetDucks 5), and the shortfall used to be
+    // made up by the ordinary respawn timer — so the level opened with four
+    // ducks and a fifth dropped in a beat later, on its own. Filling here puts
+    // the owed ducks in the SAME event batch as the authored ones, so the whole
+    // field arrives on one frame. It has to run after the barrels and clams
+    // above, because freeSpot() places around them.
+    this.fillField();
     // one consistent stream: the setup spawns land in `drained` alongside the
     // level header instead of leaking into the first step()
     this.drained.push(...this.world.events.splice(0, this.world.events.length));
@@ -268,17 +276,46 @@ export class Director {
       this.respawnAt = null;
       return;
     }
+    // A top-up belongs to the gap BETWEEN turns, so it waits for the turn to
+    // finish: nothing in flight, no fuse blinking, no clam still owing a pearl.
+    // The timer used to run from the moment the count dropped, which is the
+    // moment of the FIRST pop — so a chain that took two seconds to unwind had
+    // ducks materialising in the middle of it, a second and a half before the
+    // player's shot was over. Clearing it while unsettled also means the beat is
+    // measured from the board coming to rest, not from the pop, so the pause
+    // reads the same whether the shot popped one duck or seven.
+    if (!this.boardSettled()) {
+      this.respawnAt = null;
+      return;
+    }
     if (this.respawnAt === null) {
       this.respawnAt = this.world.time + SIM.RESPAWN_DELAY;
       return;
     }
     if (this.world.time < this.respawnAt) return;
     this.respawnAt = null;
+    this.fillField(target);
+  }
 
+  /**
+   * Place every duck the board is owed, ON ONE FRAME (user-locked 2026-08-07).
+   * The respawn path used to spawn a single duck and re-arm its timer, so a
+   * shot that popped four ducks dribbled them back one every 0.6s and the board
+   * took two and a half seconds to look whole again.
+   *
+   * freeSpot() reads world.ducks, so each pick already sees the ones placed a
+   * moment earlier in this same loop and the batch cannot stack on itself.
+   * Bounded by construction: every pass adds a duck, so the count reaches the
+   * target. `target` defaults to the level's, floored at the two ducks a legal
+   * shot needs.
+   */
+  private fillField(target = Math.max(this.level.targetDucks, 2)): void {
     const colours: Colour[] = ['yellow', 'green', 'purple', 'red'];
-    const colour = colours[Math.floor(this.world.rng() * colours.length)]!;
-    const spot = this.freeSpot();
-    this.world.spawnDuck(colour, spot.x, spot.y);
+    while (this.world.ducks.length < target) {
+      const colour = colours[Math.floor(this.world.rng() * colours.length)]!;
+      const spot = this.freeSpot();
+      this.world.spawnDuck(colour, spot.x, spot.y);
+    }
   }
 
   private freeSpot(): { x: number; y: number } {

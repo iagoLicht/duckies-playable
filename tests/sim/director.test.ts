@@ -170,7 +170,14 @@ for (let index = 0; index < LEVELS.length; index++) {
 
       expect(d.levelIndex).toBe(index);
       expect(d.level).toBe(level);
-      expect(d.world.ducks).toHaveLength(level.ducks.length);
+      // the AUTHORED ducks plus whatever start() had to add to open the board
+      // full — several levels author fewer than targetDucks
+      expect(d.world.ducks.length).toBeGreaterThanOrEqual(level.ducks.length);
+      expect(d.world.ducks).toHaveLength(Math.max(level.targetDucks, 2));
+      for (const [i, a] of level.ducks.entries()) {
+        // the authored ones are placed first, and exactly where the level says
+        expect(d.world.ducks[i]).toMatchObject({ colour: a.colour, x: a.x, y: a.y });
+      }
       expect(d.world.barrels).toHaveLength(level.barrels.length);
       expect(d.world.clams).toHaveLength(level.clams.length);
       expect(d.world.clams.every((c) => !c.open)).toBe(true);
@@ -186,7 +193,7 @@ for (let index = 0; index < LEVELS.length; index++) {
       // the setup spawns ride in the same stream as the header — nothing leaks
       // into the first step()
       const evs = drain(d);
-      expect(only(evs, 'duckSpawned')).toHaveLength(level.ducks.length);
+      expect(only(evs, 'duckSpawned')).toHaveLength(Math.max(level.targetDucks, 2));
       expect(only(evs, 'barrelSpawned')).toHaveLength(level.barrels.length);
       expect(only(evs, 'clamSpawned')).toHaveLength(level.clams.length);
       expect(only(evs, 'levelStarted')).toEqual([
@@ -364,6 +371,88 @@ for (let index = 0; index < LEVELS.length; index++) {
       run(d, 8);
       expect(d.world.ducks).toHaveLength(Math.max(level.targetDucks, 2));
       expect(d.world.ducks.every((k) => !k.live)).toBe(true);
+    });
+
+    it('the board OPENS full — every duck is there before the first step', () => {
+      const d = started(index);
+      const target = Math.max(level.targetDucks, 2);
+      // several levels author fewer ducks than they want afloat; the shortfall
+      // must be made up at start(), not dribbled in by the respawn timer
+      expect(d.world.ducks).toHaveLength(target);
+      // …and in the one batch start() already publishes, so the view builds
+      // every duck view on the same frame
+      expect(only(drain(d), 'duckSpawned')).toHaveLength(target);
+      // nothing further arrives once play begins — no late straggler
+      run(d, 2);
+      expect(only(drain(d), 'duckSpawned')).toHaveLength(0);
+    });
+
+    it('the ducks the board opens with land clear of every barrel and clam', () => {
+      const d = started(index);
+      for (const k of d.world.ducks) {
+        for (const b of d.world.barrels) {
+          expect(Math.hypot(k.x - b.x, k.y - b.y)).toBeGreaterThan(SIM.DUCK_R + SIM.BARREL_R);
+        }
+        for (const c of d.world.clams) {
+          expect(Math.hypot(k.x - c.x, k.y - c.y)).toBeGreaterThan(SIM.DUCK_R + SIM.CLAM_R);
+        }
+      }
+    });
+
+    it('the whole owed batch arrives on one frame, not one duck per delay', () => {
+      const d = started(index);
+      d.movesLeft = 99;
+      d.world.ducks.length = 0;
+      drain(d); // the level-start spawns
+      const target = Math.max(level.targetDucks, 2);
+
+      let ticks = 0;
+      while (d.world.ducks.length === 0 && ticks++ < 600) d.step(SIM.DT);
+      // the first frame anything appears on already carries the full field
+      expect(d.world.ducks).toHaveLength(target);
+      // handleRespawns runs at the END of step(), so its events sit in
+      // world.events until the next one drains them — all in the one batch
+      d.step(SIM.DT);
+      expect(only(drain(d), 'duckSpawned')).toHaveLength(target);
+    });
+
+    it('a top-up waits for the turn to resolve — never lands mid-chain', () => {
+      const d = started(index);
+      d.movesLeft = 99;
+      // one duck left and it is mid-explosion: fuse lit, blinking, not yet gone.
+      // The field is under target, so a timer counted from the moment the count
+      // dropped would drop a duck in on top of the chain still playing out.
+      d.world.ducks.splice(1);
+      const doomed = d.world.ducks[0]!;
+      doomed.matched = true;
+      doomed.matchFuse = SIM.MATCH_FUSE_TICKS;
+
+      run(d, SIM.RESPAWN_DELAY + 0.3);
+      expect(d.boardSettled()).toBe(false);
+      expect(d.world.ducks).toHaveLength(1);
+
+      // the chain finishes; the beat is measured from THERE, so nothing has
+      // appeared yet on the settling frame itself
+      doomed.matched = false;
+      run(d, SIM.RESPAWN_DELAY / 2);
+      expect(d.world.ducks).toHaveLength(1);
+
+      run(d, 6);
+      expect(d.world.ducks.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('a top-up waits for a clam mid-cycle: the pearl lands before the duck', () => {
+      if (level.clams.length === 0) return;
+      const d = started(index);
+      d.movesLeft = 99;
+      d.world.ducks.length = 0; // the whole field is owed, so a top-up is due
+      d.world.hitClam(d.world.clams[0]!);
+
+      run(d, SIM.RESPAWN_DELAY + 0.3);
+      expect(d.world.ducks).toHaveLength(0);
+
+      run(d, 6);
+      expect(d.world.ducks.length).toBeGreaterThanOrEqual(2);
     });
 
     it('never softlocks: a lone duck is always given a partner to aim at', () => {
