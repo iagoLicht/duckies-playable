@@ -9,8 +9,16 @@ import buttonUrl from '../assets/ui/btn-green-large.webp';
 
 const DESIGN_W = 720;
 const DESIGN_H = 1280;
-/** the pack's display face, already registered by the scene's font loader */
-const HUD_FONT = 'CherryBomb';
+/**
+ * The pack's heavy condensed face (asap-semicondensed-black), registered by
+ * the scene's font loader alongside CherryBomb. The card uses it throughout so
+ * the two screens read as the same UI as the HUD bar above them.
+ *
+ * Note this is NOT the role the pack's manifest assigns it — it calls Cherry
+ * Bomb the face for "Headers/CTA/score" and this one the "number/counter font".
+ * Overridden deliberately.
+ */
+const CARD_FONT = 'AsapBlack';
 
 /** pack source dimensions — the staging step never resizes, so these are exact */
 const PANEL_SRC_W = 928;
@@ -211,7 +219,7 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   const title = bannerTitle(
     o.title,
     {
-      fontFamily: HUD_FONT, fontSize: 82, fill: 0xffffff, align: 'center',
+      fontFamily: CARD_FONT, fontSize: 82, fill: 0xffffff, align: 'center',
       stroke: { color: 0x9c3a5e, width: 12, join: 'round' },
     },
     PANEL_CX, RIBBON_CY + TITLE_DY, TITLE_MAX_W,
@@ -231,7 +239,7 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   const label = new Text({
     text: o.buttonLabel,
     style: {
-      fontFamily: HUD_FONT, fontSize: 54, fill: 0xffffff, align: 'center',
+      fontFamily: CARD_FONT, fontSize: 54, fill: 0xffffff, align: 'center',
       stroke: { color: 0x14532b, width: 8, join: 'round' },
     },
   });
@@ -249,7 +257,7 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   if (o.storeLink) {
     const link = new Text({
       text: 'Get Duckies Pop — free',
-      style: { fontFamily: HUD_FONT, fontSize: 32, fill: 0xffffff, align: 'center' },
+      style: { fontFamily: CARD_FONT, fontSize: 32, fill: 0xffffff, align: 'center' },
     });
     link.anchor.set(0.5);
     link.position.set(PANEL_CX, STORE_CY);
