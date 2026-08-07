@@ -69,33 +69,17 @@ const RIBBON_SCALE = RIBBON_W / RIBBON_SRC_W;
 const TITLE_BAND_DY = -61.5 * RIBBON_SCALE;
 /**
  * ...and then back down a little, because Pixi centres a Text on its LAYOUT
- * box, which reserves descender room that an all-caps title never uses. The
- * visible letters therefore ride above the box's centre. Measured off the
- * render at this size: 9.3px on "YOU WIN!", 12.8px on "YOU LOST" — the spread
- * is the '!' against the 'T'. 11 splits them.
+ * box, which reserves descender and line-height room that an all-caps title
+ * never uses. The visible letters therefore ride above the box's centre.
+ *
+ * Measured off the render, not reasoned about: at this size and face the flat
+ * title lands 6.5px (win) / 6.3px (lose) low with this set to 11, so 5 is the
+ * value that centres it. The number is specific to a single-line Text — an
+ * earlier arced version, which anchored every glyph separately, needed 11.
  */
-const TITLE_INK_DY = 11;
+const TITLE_INK_DY = 5;
 const TITLE_DY = TITLE_BAND_DY + TITLE_INK_DY;
 
-/**
- * How far the title's outer letters drop below its middle, in design px.
- *
- * The arc is specified by RISE, not by the banner's radius, and that is a
- * deliberate correction. A probe measured the banner's own curve — 41.5px of
- * sagitta over an 824px span on the 1004px source, i.e. a circular arc of
- * radius 2066px — and matching that radius exactly was the first attempt. It
- * was geometrically faithful and looked FLAT, because a circle's rise grows
- * with the SQUARE of the span: the title is barely half the banner's width, so
- * it inherited under a third of the banner's visible curve (~11px, which reads
- * as a straight line with slightly tilted end letters).
- *
- * Setting the rise directly makes the title curve the way the banner LOOKS
- * rather than the way it measures, and it holds that look at any title length,
- * since the radius is re-solved per string from its own measured width.
- */
-const TITLE_ARC_RISE = 44;
-/** extra tracking between letters — arc text loses the font's own kerning */
-const TITLE_TRACKING = 2;
 /**
  * The banner's flat band, inside the curled end tails. A title wider than this
  * runs out over the curls and reads as overflowing the ribbon, so it is scaled
@@ -157,65 +141,24 @@ const backOut = (t: number): number => {
 const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
 
 /**
- * Lay a string along a circular arc, apex-up, so the middle letters ride
- * highest and the outer ones drop away and tilt.
+ * The banner title: one flat line, centred on (cx, cy), shrunk if it would run
+ * out over the ribbon's curled tails.
  *
- * The arc is defined by `riseTarget` — how far the ends fall below the middle,
- * in final rendered px — and the radius is solved from the string's own
- * measured width. Specifying the rise rather than the radius is what keeps the
- * curve looking the same whether the word is "YOU WIN!" or something longer;
- * a fixed radius flattens out as the text gets shorter.
- *
- * One `Text` per glyph, each rotated to the arc's tangent. Pixi has no
- * text-on-a-path, and warping a bitmap would soften the face's outline, which
- * is the one thing a title at this size cannot afford.
- *
- * The apex sits half a rise ABOVE `cy`, so the ends fall half a rise below it
- * and the block's centre lands on `cy`. Getting that sign backwards puts the
- * whole title a full rise-height low, and — because the error scales with the
- * curve — it masquerades as a vertical-offset problem that no amount of
- * adjusting the offset ever fixes.
+ * Straight on purpose. An earlier pass laid the letters along the banner's own
+ * arc; it was rejected. Keeping it flat means the block's vertical placement is
+ * decided entirely by `cy`, which is what makes the two offsets that put it on
+ * the band's centre line (TITLE_BAND_DY, TITLE_INK_DY) predictable.
  */
-function arcText(
-  text: string, style: TextStyleOptions,
-  cx: number, cy: number, riseTarget: number, tracking: number, maxWidth: number,
-): Container {
-  const glyphs = [...text].map((ch) => new Text({ text: ch, style }));
-  for (const g of glyphs) g.anchor.set(0.5);
-
-  const advances = glyphs.map((g) => g.width + tracking);
-  const total = advances.reduce((a, b) => a + b, 0) - tracking;
-  // shrink-to-fit rather than clip. Applied to the finished container, so the
-  // arc is computed once at full size and simply scaled — the letters stay on
-  // the same curve instead of re-solving to a flatter one.
-  const fit = Math.min(1, maxWidth / total);
-
-  // solve the radius from the geometry we actually want. `rise` is pre-divided
-  // by `fit` so that after the shrink-to-fit scale the RENDERED rise is
-  // riseTarget, not something smaller.
-  const half = total / 2;
-  const rise = Math.max(1, riseTarget / fit);
-  const radius = (half * half + rise * rise) / (2 * rise);
-
-  const box = new Container();
-  // arc centre sits directly below the apex, which is half a rise above cy
-  const acx = cx;
-  const acy = cy - rise / 2 + radius;
-
-  let d = -total / 2;
-  for (const [i, g] of glyphs.entries()) {
-    const mid = d + (advances[i]! - tracking) / 2;
-    const a = mid / radius; // arc length over radius — the tangent angle too
-    g.position.set(acx + radius * Math.sin(a), acy - radius * Math.cos(a));
-    g.rotation = a;
-    box.addChild(g);
-    d += advances[i]!;
-  }
-  // scale about the apex, so shrinking does not slide the title off the band
-  box.pivot.set(acx, cy);
-  box.position.set(acx, cy);
-  box.scale.set(fit);
-  return box;
+function bannerTitle(
+  text: string, style: TextStyleOptions, cx: number, cy: number, maxWidth: number,
+): Text {
+  const t = new Text({ text, style });
+  t.anchor.set(0.5);
+  t.position.set(cx, cy);
+  // shrink to fit rather than clip, so a longer title later degrades instead of
+  // spilling over the tails
+  if (t.width > maxWidth) t.scale.set(maxWidth / t.width);
+  return t;
 }
 
 /**
@@ -265,13 +208,13 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   ribbon.scale.set(RIBBON_SCALE);
   ribbon.position.set(PANEL_CX, RIBBON_CY);
 
-  const title = arcText(
+  const title = bannerTitle(
     o.title,
     {
       fontFamily: HUD_FONT, fontSize: 82, fill: 0xffffff, align: 'center',
       stroke: { color: 0x9c3a5e, width: 12, join: 'round' },
     },
-    PANEL_CX, RIBBON_CY + TITLE_DY, TITLE_ARC_RISE, TITLE_TRACKING, TITLE_MAX_W,
+    PANEL_CX, RIBBON_CY + TITLE_DY, TITLE_MAX_W,
   );
 
   const ribbonBox = new Container();
