@@ -190,19 +190,36 @@ export class World {
     // keeps the blink bands alternating however long that is, and drag
     // guarantees every duck does come to rest.
     //
-    // Decide-then-pop, in two passes: a pop's blast SHOVES its neighbours, so
-    // deciding in one pass would let the first pop of a settled same-colour
-    // pair knock its partner's hold back to zero — splitting a double-pop the
-    // real game renders on the same frame.
-    const due: Duck[] = [];
+    // ONE BANG, NOT A DRUM ROLL (user-locked 2026-08-07). Readiness is still
+    // decided per duck, but the pop is not: the whole doomed set is held until
+    // the LAST of them is ready and then goes off on a single frame. Each duck
+    // firing the moment it personally settled meant a blast that caught four
+    // ducks paid out as four separate bangs spread over a second, because the
+    // knock sends every victim a different distance. The set is the chain's
+    // GENERATION — a pop's blast dooms its neighbours, and they are flagged
+    // after this pass, so they wait out their own slide and detonate together
+    // as the next generation. Chains still read as chains; each rung is one
+    // bang instead of a stutter.
+    //
+    // This terminates: nothing new can be doomed without a pop or a contact,
+    // drag brings every duck to rest, and the fuse counts past zero — so a set
+    // that is merely waiting always becomes ready.
+    //
+    // Decide-then-pop, in two passes, for the same reason it always was: a
+    // pop's blast SHOVES its neighbours, so deciding inside the pop loop would
+    // let the first pop knock a partner's hold back to zero.
+    const doomed: Duck[] = [];
+    let ready = true;
     for (const d of this.ducks) {
       if (!d.matched || d.popping) continue;
       d.matchFuse--; // drives the blink band; runs past 0 while settling
       d.settleTicks = d.vx === 0 && d.vy === 0 ? d.settleTicks + 1 : 0;
       const held = d.settleTicks >= SIM.BLAST_SETTLE_CONFIRM_TICKS;
-      if (held && (d.popOnSettle || d.matchFuse <= 0)) due.push(d);
+      doomed.push(d);
+      if (!held || !(d.popOnSettle || d.matchFuse <= 0)) ready = false;
     }
-    for (const d of due) {
+    if (!ready) return;
+    for (const d of doomed) {
       if (!d.popping) this.popDuck(d);
     }
   }
