@@ -622,6 +622,26 @@ for (let index = 0; index < LEVELS.length; index++) {
       }
     });
 
+    it('respawned ducks land outside the blast zone of a duck about to explode', () => {
+      const d = started(index);
+      d.movesLeft = 99;
+      // one duck stays behind with a lit fuse that will not run out during the
+      // test — a pending explosion parked on the board — and the field is
+      // otherwise emptied so the respawn batch has to land around it
+      const doomed = d.world.ducks[0]!;
+      doomed.matched = true;
+      doomed.matchFuse = 100000;
+      d.world.ducks.splice(1);
+      run(d, 3);
+      for (const k of d.world.ducks) {
+        if (k === doomed) continue;
+        expect(
+          Math.hypot(k.x - doomed.x, k.y - doomed.y),
+          `level ${index}: a respawn landed inside the pending blast`,
+        ).toBeGreaterThan(SIM.BLAST_R);
+      }
+    });
+
     it('the finale arms on the last goal standing and cranks the assist', () => {
       const d = started(index);
       d.movesLeft = 99;

@@ -402,3 +402,54 @@ describe('duckBumped', () => {
     expect(run()).toBe(first);
   });
 });
+
+describe('spawn protection', () => {
+  it('a blast neither dooms nor shoves a duck inside its spawn shield', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 360, 700);
+    w.blast('green', 420, 700); // 60px away — deep inside BLAST_R
+    expect(d.matched).toBe(false);
+    expect(d.popOnSettle).toBe(false);
+    expect(d.vx).toBe(0);
+    expect(d.vy).toBe(0);
+  });
+
+  it('the shield expires on its own clock and the duck is ordinary again', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 360, 700);
+    for (let i = 0; i < SIM.SPAWN_SHIELD_TICKS; i++) w.step(SIM.DT);
+    w.blast('green', 420, 700);
+    expect(d.matched).toBe(true);
+    expect(d.popOnSettle).toBe(true);
+  });
+
+  it('launching sheds the shield: a fired duck is fully active at once', () => {
+    const w = mk();
+    const d = w.spawnDuck('red', 360, 700);
+    w.launch(d.id, 800, 0);
+    expect(d.spawnShieldTicks).toBe(0);
+  });
+
+  it('a doomed duck cannot recruit a shielded one by ramming it', () => {
+    const w = mk();
+    const fresh = w.spawnDuck('red', 400, 700);
+    const doomed = w.spawnDuck('red', 280, 700);
+    doomed.matched = true; // mid-chain: fuse lit, drifting toward the arrival
+    doomed.matchFuse = 100000;
+    doomed.vx = 900;
+    doomed.live = true;
+    for (let i = 0; i < 12; i++) w.step(SIM.DT); // well inside the shield window
+    expect(fresh.matched).toBe(false);
+    expect(fresh.popOnSettle).toBe(false);
+  });
+
+  it('a CLEAN same-colour hit still matches inside the window — only explosions in progress are shut out', () => {
+    const w = mk();
+    const fresh = w.spawnDuck('red', 460, 700);
+    const shot = w.spawnDuck('red', 300, 700);
+    w.launch(shot.id, 900, 0);
+    for (let i = 0; i < 12; i++) w.step(SIM.DT);
+    expect(fresh.matched).toBe(true);
+    expect(shot.matched).toBe(true);
+  });
+});

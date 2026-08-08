@@ -35,12 +35,15 @@ export interface LevelDef {
   /** where respawning ducks may appear */
   spawnRegion: { x0: number; y0: number; x1: number; y1: number };
   /**
-   * Clock-rig pacing (the ad's second beat). Steers respawn SUPPLY — which
-   * colour arrives, and where in the spawn region — toward finishing
+   * Clock-rig pacing (the ad's second beat). Steers the COLOUR a respawn
+   * arrives in and how far the aim assist breathes, toward finishing
    * `targetLeft` pearls short at 0:00, so the loss lands as a near miss
-   * whatever the seed. Never touches payouts, physics or the clock; inert on
-   * any Director run with an infinite clock (the solvability gate, the
-   * tuner). See docs/superpowers/specs/2026-08-08-timer-lose-rigged-build-design.md
+   * whatever the seed. Never touches payouts, physics or the clock — and
+   * never spawn timing or placement either: those match every other level
+   * exactly (user-set 2026-08-08; the governor's hold and window dials are
+   * gone). Inert on any Director run with an infinite clock (the solvability
+   * gate, the tuner).
+   * See docs/superpowers/specs/2026-08-08-timer-lose-rigged-build-design.md
    * and tests/tools/calibrate-clock.mjs, which chose the numbers.
    */
   pace?: {
@@ -48,25 +51,16 @@ export interface LevelDef {
     targetLeft: number;
     /** pearls of pace error that saturate the steering */
     spread: number;
-    /** odds cap, 0..1: a respawn colour pick is steered at full pressure */
+    /** odds of steering a respawn's colour at full pressure — may sit above 1
+     *  so half-pressure still steers reliably */
     colourGain: number;
-    /** 0..1: max shrink of the spawn window toward/away from the clams */
-    placeGain: number;
     /**
      * How far the aim assist breathes with the pace, in assist units at full
-     * pressure (behind → up, ahead → down, clamped to 0.15..0.75). The finale
+     * pressure (behind → up, ahead → down, clamped to 0.25..0.7). The finale
      * already cranks the assist mid-level, so a governed assist speaks the
      * game's own language; 0 turns the dial off.
      */
     assistGain: number;
-    /**
-     * Extra seconds on the respawn debt at full AHEAD pressure. The batch
-     * still lands whole, on one beat, exactly as authored — it just falls due
-     * a breath later when the run is hot, so the next chain starts on a
-     * briefly thinner board. Behind-pressure never shortens the shipped
-     * RESPAWN_DELAY. 0 turns the dial off.
-     */
-    holdGain: number;
   };
 }
 
@@ -670,12 +664,23 @@ export const LEVELS: LevelDef[] = [
     // the reasoning lives in
     // docs/superpowers/specs/2026-08-08-timer-lose-rigged-build-design.md.
     //
-    // Locked by tests/tools/calibrate-clock.mjs at 400 clocked seeds: the
-    // distracted thumb wins 17%, the focused variant 12%; every loss is the
-    // clock's (never the move budget), ~90% end with all crates down, and the
-    // pearl counter dies at p25/p50/p75 = 3/5/8 short for the noisy bot — real
-    // players also get the assist breathing below, which the bot's aim-hunt
-    // cannot feel. Guarded by tests/sim/rigged.test.ts.
-    pace: { targetLeft: 3, spread: 2, colourGain: 1.0, placeGain: 0.85, assistGain: 0.25, holdGain: 2.2 },
+    // The governor now owns exactly two dials — respawn COLOUR and the assist
+    // (user-set 2026-08-08): the earlier hold/placement dials made this
+    // board's respawns arrive later and land lower than every other level's,
+    // and the ad's two beats must spawn identically. Within that constraint
+    // the colour dial saturates: sweeps at 400 clocked seeds put its floor at
+    // ~20% bot wins (the old four-dial point sat at 17%), and every step past
+    // this one — spread 1.0, quota 32 — bought its wins back by pushing the
+    // median miss past the near-miss gate.
+    //
+    // Locked by tests/tools/calibrate-clock.mjs at 400 clocked seeds (with
+    // the spawn shield in force — SIM.SPAWN_SHIELD_TICKS trimmed the free
+    // chain pearls and these numbers absorbed it): the distracted thumb wins
+    // 18.5%, the focused variant 21.0%; every loss is the clock's (never the
+    // move budget), ~89% end with all crates down, and the pearl counter dies
+    // at p25/p50/p75 = 3/6/9 short for the thumb — real players also get the
+    // assist breathing, which the bot's aim-hunt mostly corrects away.
+    // Guarded by tests/sim/rigged.test.ts.
+    pace: { targetLeft: 2, spread: 1.2, colourGain: 2.5, assistGain: 0.25 },
   },
 ];

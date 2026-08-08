@@ -30,6 +30,9 @@ export interface Duck {
   matchFuse: number;
   /** caught by a blast: pops after settling + a stillness hold (fuse is the failsafe) */
   popOnSettle: boolean;
+  /** fixed steps of spawn protection left — while >0, explosions in progress
+   *  cannot doom, shove or recruit this duck (see SIM.SPAWN_SHIELD_TICKS) */
+  spawnShieldTicks: number;
   /** consecutive fully-static ticks while doomed — resets the moment it moves */
   settleTicks: number;
 }

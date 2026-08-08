@@ -44,9 +44,7 @@ const PACE_OFF = process.argv.includes('--pace=off');
 const TARGET_LEFT = argNum('targetLeft', -1);
 const SPREAD = argNum('spread', -1);
 const COLOUR_GAIN = argNum('colourGain', -1);
-const PLACE_GAIN = argNum('placeGain', -1);
 const ASSIST_GAIN = argNum('assistGain', -1);
-const HOLD_GAIN = argNum('holdGain', -1);
 const CLAM_XS = argList('clamx'); // e.g. --clamx=190,530 repositions the clams
 const SPAWN_Y1 = argNum('spawnY1', -1); // deepen the spawn region's bottom edge
 
@@ -91,9 +89,7 @@ else if (level.pace) {
   if (TARGET_LEFT >= 0) level.pace.targetLeft = TARGET_LEFT;
   if (SPREAD >= 0) level.pace.spread = SPREAD;
   if (COLOUR_GAIN >= 0) level.pace.colourGain = COLOUR_GAIN;
-  if (PLACE_GAIN >= 0) level.pace.placeGain = PLACE_GAIN;
   if (ASSIST_GAIN >= 0) level.pace.assistGain = ASSIST_GAIN;
-  if (HOLD_GAIN >= 0) level.pace.holdGain = HOLD_GAIN;
 }
 
 if (CLAM_XS) {

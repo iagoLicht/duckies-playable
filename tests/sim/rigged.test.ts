@@ -14,8 +14,16 @@ import { playLevel, pct, type BotStats } from './bot';
  * distribution, so a future balance pass cannot silently turn the ad's ending
  * into a blowout loss, a routine win, or a move-starved fizzle.
  *
- * Bands are deliberately wider than the locked point (17% win, p50 5 short) —
- * this is a tripwire for the SHAPE, not a re-run of the calibration.
+ * Bands are deliberately wider than the locked point (thumb 18.5% win, p50 6
+ * short) — this is a tripwire for the SHAPE, not a re-run of the calibration.
+ *
+ * The bands were re-based 2026-08-08 after three user-set constraints each
+ * measurably widened the loss distribution: beat-2 spawns must match beat 1
+ * (the governor's hold/placement dials removed), spawns land outside pending
+ * blast zones, and fresh spawns carry a short shield against explosions in
+ * progress. Under all three the calibration sweep's floor is ~18-20% wins
+ * with a median 6 short (400 seeds); this 120-seed batch samples that same
+ * distribution a point or two wide.
  */
 describe('the rigged second beat — near-win clock loss', () => {
   const SEEDS = 120;
@@ -51,7 +59,7 @@ describe('the rigged second beat — near-win clock loss', () => {
   it('losses die close to the quota — a near miss, not a blowout', async () => {
     await play();
     const left = runs.filter((r) => !r.won).map((r) => r.pearlsLeft).sort((a, b) => a - b);
-    expect(pct(left, 0.5)).toBeLessThanOrEqual(6);
+    expect(pct(left, 0.5)).toBeLessThanOrEqual(7);
     const within9 = left.filter((v) => v <= 9).length / left.length;
     expect(within9).toBeGreaterThan(0.75);
   });

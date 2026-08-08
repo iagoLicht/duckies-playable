@@ -199,10 +199,9 @@ export class Director {
         this.pushCounter();
       }
       // the debt is booked by the POP that created it, and comes due on its own
-      // clock — nothing about the rest of the board delays it (though the pace
-      // hold may stretch the clock itself on a hot rigged run: respawnDueAt)
+      // clock — nothing about the rest of the board delays it
       if (e.type === 'duckPopped') {
-        this.respawnDue.push(this.respawnDueAt());
+        this.respawnDue.push(this.world.time + SIM.RESPAWN_DELAY);
       }
       // a pearl counts when it LANDS on the counter, not when the shell spills
       // it — so the number the player sees drop is the pearl they just watched
@@ -411,8 +410,10 @@ export class Director {
     // then started the RESPAWN_DELAY beat. Each pop now books its own debt and
     // that debt comes due on its own clock, so ducks arrive while a chain is
     // still going off around them. That IS the intent: the board is never
-    // visibly short, at the price of ducks landing next to live explosions —
-    // and one that lands inside a blast is simply doomed with the rest.
+    // visibly short — and the arrivals land OUTSIDE the reach of any fuse still
+    // burning (freeSpot), so they join the board rather than feed the funeral:
+    // a duck dropped into a pending blast only stretched the chain and the
+    // player's wait with it (user-set 2026-08-08).
     //
     // Owed but nothing booked: the field is short for a reason no pop accounted
     // for (an authored board opening short, a duck removed some other way).
@@ -422,7 +423,7 @@ export class Director {
     // guarantee the old settle-gated path gave for free.
     if (this.respawnDue.length === 0) {
       const owed = target - this.world.ducks.length;
-      for (let i = 0; i < owed; i++) this.respawnDue.push(this.respawnDueAt());
+      for (let i = 0; i < owed; i++) this.respawnDue.push(this.world.time + SIM.RESPAWN_DELAY);
       return;
     }
     let due = 0;
@@ -458,9 +459,11 @@ export class Director {
   /**
    * Clock-rig pace pressure, −1 (far behind the near-miss line) … +1 (far
    * ahead of it). Zero whenever the level carries no `pace` block or the clock
-   * is infinite — and zero means every caller takes exactly the legacy random
-   * path, RNG call for RNG call, which is what keeps un-rigged levels (and the
-   * untimed solvability gate and tuner) byte-identical to before.
+   * is infinite — and zero means both consumers (the respawn colour pick and
+   * the governed assist) take exactly the un-paced path, RNG call for RNG
+   * call, so a level without `pace` cannot be told from one that predates the
+   * governor. Spawn timing and placement have no pace path at all — the ad's
+   * two beats must spawn identically (user-set 2026-08-08).
    */
   private pacePressure(): number {
     const pace = this.level.pace;
@@ -501,47 +504,31 @@ export class Director {
     return colours[Math.floor(this.world.rng() * colours.length)]!;
   }
 
-  /**
-   * When a replacement booked NOW falls due. RESPAWN_DELAY as shipped — plus
-   * the pace hold on a hot rigged run, which stretches the debt's clock (never
-   * shortens it) so the next chain starts on a briefly thinner board. The
-   * batch still lands whole, on one beat, exactly as authored.
-   */
-  private respawnDueAt(): number {
-    // never on a decided board: the banner waits for the board to be whole
-    // (user-locked "a decided board still fills back up"), and pace has no
-    // meaning once the outcome is in
-    const hold = this.won || this.failed
-      ? 0
-      : Math.max(0, this.pacePressure()) * (this.level.pace?.holdGain ?? 0);
-    return this.world.time + SIM.RESPAWN_DELAY + hold;
-  }
-
   private freeSpot(): { x: number; y: number } {
     const R = this.level.spawnRegion;
-    // Pace steering shrinks the sampled window: behind the near-miss line the
-    // board deals arrivals nearer its bottom edge — the clam end, on the
-    // rigged board — ahead of it, nearer the top. At zero pressure the window
-    // is the whole authored region, exactly as before.
-    const pressure = this.pacePressure();
-    const gain = this.level.pace?.placeGain ?? 0;
-    let y0 = R.y0;
-    let y1 = R.y1;
-    if (pressure < 0) y0 = R.y0 - pressure * gain * (R.y1 - R.y0);
-    else if (pressure > 0) y1 = R.y1 - pressure * gain * (R.y1 - R.y0);
-    // how much room a candidate has: negative means it overlaps something
+    // how much room a candidate has: negative means it overlaps something.
+    // A duck with a lit fuse (matched — every pending explosion carries it,
+    // contact match and blast victim alike; popOnSettle is belt and braces) is
+    // not an obstacle but a SCHEDULED BLAST, so the exclusion is its reach:
+    // BLAST_R of centre-distance, padded a duck radius for the drift before it
+    // settles and goes off. A replacement dropped inside that circle was
+    // doomed on arrival — it fed the chain another generation and stretched
+    // the wait between turns with it (user-set 2026-08-08).
     const clearance = (x: number, y: number): number => {
       let worst = Infinity;
-      for (const d of this.world.ducks) worst = Math.min(worst, Math.hypot(d.x - x, d.y - y) - SIM.DUCK_R * 2.4);
+      for (const d of this.world.ducks) {
+        const keep = d.matched || d.popOnSettle ? SIM.BLAST_R + SIM.DUCK_R : SIM.DUCK_R * 2.4;
+        worst = Math.min(worst, Math.hypot(d.x - x, d.y - y) - keep);
+      }
       for (const b of this.world.barrels) worst = Math.min(worst, Math.hypot(b.x - x, b.y - y) - (SIM.DUCK_R + SIM.BARREL_R + 8));
       for (const c of this.world.clams) worst = Math.min(worst, Math.hypot(c.x - x, c.y - y) - (SIM.DUCK_R + SIM.CLAM_R + 8));
       return worst;
     };
-    let best = { x: (R.x0 + R.x1) / 2, y: (y0 + y1) / 2 };
+    let best = { x: (R.x0 + R.x1) / 2, y: (R.y0 + R.y1) / 2 };
     let bestClear = -Infinity;
     for (let tries = 0; tries < 40; tries++) {
       const x = R.x0 + this.world.rng() * (R.x1 - R.x0);
-      const y = y0 + this.world.rng() * (y1 - y0);
+      const y = R.y0 + this.world.rng() * (R.y1 - R.y0);
       const c = clearance(x, y);
       if (c > 0) return { x, y };
       if (c > bestClear) {
@@ -550,7 +537,8 @@ export class Director {
       }
     }
     // nothing was clear: fall back to the roomiest candidate seen rather than
-    // the region's centre, which on a crowded board can sit inside an entity
+    // the region's centre, which on a crowded board can sit inside an entity —
+    // and "roomiest" already means farthest out of every pending blast
     return best;
   }
 

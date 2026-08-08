@@ -197,6 +197,19 @@ export const SIM = {
    */
   RESPAWN_DELAY: 0.2,
   /**
+   * Fixed steps a freshly spawned duck is shielded from EXPLOSIONS IN
+   * PROGRESS: a blast neither dooms nor shoves it, and a duck already burning
+   * a fuse cannot recruit it by contact (a CLEAN same-colour hit still
+   * matches — the shield is against the chain that predates the arrival, not
+   * against play). Replacements land while the chain that owed them is still
+   * going off (RESPAWN_DELAY above), and an arrival conscripted on touchdown
+   * extended the chain and the wait between turns with it (user-set
+   * 2026-08-08). Half a second: longer than a blast generation's drift-and-
+   * confirm beat, far shorter than any path from "spawned" to "the player
+   * could legally shoot at it". A launched duck sheds it instantly.
+   */
+  SPAWN_SHIELD_TICKS: 30,
+  /**
    * The board's countdown, in fixed steps — 30 s at 60 Hz. This lived in the
    * view as a decorative number until now; the README's own rule ("A limit
    * enforced only in the view is not enforced", learned on the move budget)

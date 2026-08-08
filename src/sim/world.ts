@@ -30,7 +30,7 @@ export class World {
       id: this.nextId++, kind: 'duck', colour, x, y, vx: 0, vy: 0,
       live: false, popping: false, matched: false, matchFuse: 0,
       popOnSettle: false, settleTicks: 0, ticksMoving: 0,
-      shotStrikePending: false,
+      shotStrikePending: false, spawnShieldTicks: SIM.SPAWN_SHIELD_TICKS,
     };
     this.ducks.push(d);
     this.events.push({ type: 'duckSpawned', duck: d });
@@ -147,6 +147,9 @@ export class World {
     d.vy = vy;
     d.live = true;
     d.ticksMoving = 0;
+    // a fired duck is a MOVE, not an arrival — it plays by every rule from
+    // the first pixel, so whatever spawn shield it still carried is spent
+    d.spawnShieldTicks = 0;
     // the player aimed this shot at a duck, so the duck it reaches first is
     // owed a full-strength hit however oblique the contact turns out to be
     d.shotStrikePending = true;
@@ -160,6 +163,10 @@ export class World {
     // contact-damage cooldowns tick down once per fixed step
     for (const b of this.barrels) {
       if (b.hitCooldown > 0) b.hitCooldown--;
+    }
+    // …and so does every fresh arrival's spawn shield
+    for (const d of this.ducks) {
+      if (d.spawnShieldTicks > 0) d.spawnShieldTicks--;
     }
 
     // official drag (decomp xr): banded, v *= 1/(1+drag·dt), with a hard stop
@@ -402,8 +409,16 @@ export class World {
     if (a.colour !== b.colour) return;
     if (!a.live && !b.live) return;
     if (relSpeed < SIM.POP_SPEED) return;
-    this.flagMatched(a);
-    this.flagMatched(b);
+    // A duck already burning a fuse cannot RECRUIT a spawn-shielded arrival:
+    // that contact is the tail of an explosion the arrival predates (a blast
+    // victim slamming into the replacement its own chain booked). A clean
+    // pair — neither on a fuse — still matches even inside the window; the
+    // shield is against chains in progress, not against play. Decided BEFORE
+    // any flagging, or flagging a would make b's partner-check read "doomed".
+    const aShielded = a.spawnShieldTicks > 0 && b.matched;
+    const bShielded = b.spawnShieldTicks > 0 && a.matched;
+    if (!aShielded) this.flagMatched(a);
+    if (!bShielded) this.flagMatched(b);
   }
 
   private collideDuckBarrels(): void {
@@ -566,6 +581,11 @@ export class World {
     this.events.push({ type: 'blast', colour, x, y, r: SIM.BLAST_R });
     for (const d of this.ducks) {
       if (d.popping) continue;
+      // a fresh arrival still inside its spawn shield is not here yet as far
+      // as THIS explosion is concerned: the chain predates the duck, and
+      // conscripting it on touchdown is exactly the accidental generation the
+      // shield exists to stop (user-set 2026-08-08). No doom, no shove.
+      if (d.spawnShieldTicks > 0) continue;
       const dist = Math.hypot(d.x - x, d.y - y);
       if (dist > SIM.BLAST_R) continue;
       const kick = SIM.BLAST_KNOCK - (SIM.BLAST_KNOCK - SIM.BLAST_KNOCK_EDGE) * (dist / SIM.BLAST_R);

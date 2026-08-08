@@ -20,6 +20,16 @@ const firstTick = (log: Stamped[], type: SimEvent['type']): number =>
   log.find((s) => s.e.type === type)?.tick ?? -1;
 
 /**
+ * Run out every duck's spawn shield. These tests are about BLAST semantics on
+ * an ordinary duck, and a freshly spawned one is deliberately not ordinary —
+ * explosions in progress cannot touch it (SIM.SPAWN_SHIELD_TICKS; the shield
+ * has its own suite in world.test.ts).
+ */
+const ripen = (w: World): void => {
+  for (let i = 0; i < SIM.SPAWN_SHIELD_TICKS; i++) w.step(SIM.DT);
+};
+
+/**
  * The blast shove: every duck inside BLAST_R takes a subtle radial kick with
  * linear centre→edge falloff and is doomed regardless of colour — it blinks
  * from the moment it's caught, keeps its physics, and pops only after it has
@@ -30,6 +40,7 @@ describe('blast knockback and settle-pops', () => {
   it('pushed → blinks while moving → settles → holds still → explodes', () => {
     const w = new World(1);
     const d = w.spawnDuck('purple', 360, 600);
+    ripen(w);
     w.blast('green', 360, 700); // 100px below the duck — inside BLAST_R 135
 
     // pushed straight away from the blast, doomed, blinking — but NOT popped
@@ -68,6 +79,7 @@ describe('blast knockback and settle-pops', () => {
     // clear of the original blast AND of the victim's slide lane, but inside
     // blast range of where the victim comes to rest (~(360, 538))
     const second = w.spawnDuck('red', 460, 520);
+    ripen(w);
     w.blast('green', 360, 700);
     expect(first.matched).toBe(true);
     expect(second.matched).toBe(false); // out of reach of the first blast
@@ -86,6 +98,7 @@ describe('blast knockback and settle-pops', () => {
     const w = new World(1);
     // knocked into the bumper lane, so it is bounced around well past any fuse
     const d = w.spawnDuck('purple', 200, 950);
+    ripen(w);
     w.blast('green', 320, 950);
 
     let poppedWhileMoving = false;
@@ -110,6 +123,7 @@ describe('blast knockback and settle-pops', () => {
     const w = new World(1);
     const near = w.spawnDuck('purple', 360, 620); // 80px from the blast
     const far = w.spawnDuck('red', 360, 830); // 130px from the blast
+    ripen(w);
     w.blast('green', 360, 700);
 
     expect(near.vy).toBeLessThan(0); // pushed up
@@ -120,6 +134,7 @@ describe('blast knockback and settle-pops', () => {
   it('a same-colour victim gets the identical treatment: fuse, shove, doom', () => {
     const w = new World(1);
     const d = w.spawnDuck('green', 360, 600);
+    ripen(w);
     w.blast('green', 360, 700);
 
     expect(d.matched).toBe(true);
@@ -132,6 +147,7 @@ describe('blast knockback and settle-pops', () => {
   it('leaves ducks outside the radius untouched', () => {
     const w = new World(1);
     const d = w.spawnDuck('purple', 360, 500); // 200px away
+    ripen(w);
     w.blast('green', 360, 700);
 
     expect(d.vx).toBe(0);

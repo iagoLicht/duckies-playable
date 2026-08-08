@@ -135,6 +135,42 @@ so real lagging players land tighter than these bot margins. Win rates near
 `tests/sim/rigged.test.ts` replays a seed batch and asserts the distribution
 so a future tuning pass cannot silently break the ad's ending.
 
+## Addendum (2026-08-08, later): spawn parity retired two dials
+
+User direction after playtesting the build: **beat 2 must spawn exactly like
+beat 1** — same respawn timing, placement window and pacing. That retired the
+governor's `holdGain` (respawn-debt stretch) and `placeGain` (spawn-window
+shrink); the `pace` schema now carries only `targetLeft / spread / colourGain
+/ assistGain`. The same pass also made `freeSpot()` (all levels, uniformly)
+refuse to place a replacement inside the blast reach of any duck whose fuse is
+lit, so arrivals stop feeding half-finished chains and stretching the wait
+between turns.
+
+Recalibrated under that constraint (400 clocked seeds): the colour dial
+saturates at ~20% bot wins — sweeps past the re-locked point traded the
+near-miss median away (spread 1.0 and quota 32 both push p50 to 7 short) or
+bought nothing (moves 10: the clock still binds first, identical rates). The
+board itself (quota 31, moves 11, clams 185/535) is untouched, per the same
+direction.
+
+The same day added a third constraint: **fresh spawns carry a short shield**
+(`SIM.SPAWN_SHIELD_TICKS`, 0.5 s) against explosions in progress — a blast
+neither dooms nor shoves a shielded arrival, and a fuse-burning duck cannot
+recruit one by contact (clean matches still land; a launched duck sheds the
+shield instantly). Replacements land mid-chain by design, and an arrival
+conscripted on touchdown extended the chain and the dead time between turns.
+The shield trims the chains' free pearls, so the loss distribution widened a
+hair and the dials were re-swept: targetLeft 1, spread 1.0/1.4, colourGain
+3.5 and assistGain 0.45 all measured equal or worse.
+
+Re-locked: **`pace { targetLeft 2, spread 1.2, colourGain 2.5, assistGain
+0.25 }`** → thumb wins 18.5%, focused 21.0%; 100% of losses are the clock's;
+losses die at p25/p50/p75 = 3/6/9 pearls short (thumb), 79% within 9; ~89%
+of losses end with every crate down. The rigged.test near-miss band was
+re-based to this floor (median ≤ 7 at its 120-seed sample). `colourGain`
+above 1 is intentional — the steer probability is `|pressure| × gain`, so
+2.5 means half-pressure already steers reliably.
+
 ## Export
 
 `scripts/pack.mjs` learns an output name (env `DP_OUT_NAME`, default unchanged
