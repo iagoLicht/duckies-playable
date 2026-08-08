@@ -27,6 +27,7 @@ is compiled out of the build, so the shipped ad always opens on level 1.
 | `npm run calibrate` | plays a board under the real clock+budget at two skill levels — the rigged beat's tuning instrument |
 | `npm run assets` | re-stages art from the asset pack into `src/assets` |
 | `npm run shot` | screenshots a built file and fails on console errors |
+| `npm run audio` | plays the board with real mouse/touch gestures (dev server) and gates the sound layer's counters — incl. the cold-start "first shot must be voiced" regression |
 | `npm run responsive` | measures the fit, the HUD and the tint across the device matrix — see *Screen fitting* |
 | `npm run perf` | frame-time stats + CPU profile under CPU throttle, vs the dev server or a built file — see `tests/perf.mjs` |
 | `npm run flow` | plays the whole ad (L9 → card → L10) in a browser N times and reports each ending |
@@ -58,7 +59,11 @@ frame and is otherwise a pure function of sim state.
 - **Chains.** An explosion knocks every duck within `BLAST_R`, dooms them
   regardless of colour, and each doomed duck explodes **once it has come fully
   to rest** — so chains walk across the board with a deliberate rhythm rather
-  than going off all at once.
+  than going off all at once. The one exception: a freshly spawned duck is
+  shielded for half a second (`SPAWN_SHIELD_TICKS`) against explosions already
+  in progress — replacements land mid-chain by design, and an arrival
+  conscripted on touchdown only stretched the chain and the wait. A clean
+  same-colour hit still matches it, and a launched duck sheds the shield.
 - **Clams** are solid bumpers *and* repeatable pearl dispensers. A fast direct
   hit or any blast reaching one opens the shell, which spills exactly one pearl;
   the pearl flies up to the HUD, drops the pearl counter by one, and the shell
@@ -172,7 +177,8 @@ Several manifest-tagged "core" VFX textures are staged but not yet used (see
 
 The ad's beat 2 ("The Golden Pearl") is designed to be **taken by the clock a
 hair short of the pearl quota** — the timer-lose build. A per-level `pace`
-block steers respawn *supply* (colour, placement, respawn timing, assist)
+block steers respawn *colour* and the aim assist (never spawn timing or
+placement — the two beats spawn identically, by request)
 toward finishing `targetLeft` short at 0:00; it never touches payouts, physics
 or the clock, is inert on untimed runs (the solvability gate, the tuner), and
 absent `pace` every other level is bit-identical, RNG call for RNG call.

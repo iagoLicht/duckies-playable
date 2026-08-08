@@ -10,6 +10,7 @@
     "tune": "node tests/tools/tune-levels.mjs",
     "calibrate": "node tests/tools/calibrate-clock.mjs",
     "shot": "node tests/shot.mjs",
+    "audio": "node tests/audio-probe.mjs",
     "responsive": "node tests/responsive.mjs",
     "perf": "node tests/perf.mjs",
     "flow": "node tests/rigged-flow.mjs"

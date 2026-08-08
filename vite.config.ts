@@ -11,4 +11,11 @@ export default defineConfig({
     chunkSizeWarningLimit: 8192,
   },
   plugins: [viteSingleFile()],
+  preview: {
+    // `vite preview` is how builds get tested on real phones over the LAN, and
+    // without this a phone quietly re-serves yesterday's cached artifact on
+    // refresh (no Cache-Control means heuristic freshness) — a rebuilt file
+    // then "still has the bug" on the device. Never cache test serves.
+    headers: { 'Cache-Control': 'no-store' },
+  },
 });

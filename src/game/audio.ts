@@ -180,18 +180,20 @@ const MASTER_GAIN = 0.6;
 const MAX_TOTAL_VOICES = 12;
 
 /**
- * How late a play request may still be honoured while the first decode is in
- * flight, because the unlock gesture IS the player's first grab: `launchPull` is
- * requested on the very event that builds the audio graph, so without this the
- * first pull of the session is always silent (it was, until the browser probe
- * caught it).
+ * How late a play request may still be honoured while the audio layer is
+ * finishing its cold start, because the unlock gesture IS the player's first
+ * grab: `launchPull` is requested on the very event that builds the audio
+ * graph, so without this the first pull of the session is always silent (it
+ * was, until the browser probe caught it).
  *
  * MEASURED in headless Chromium: `new AudioContext()` 327 ms, fetching the 11
  * clips 206 ms, decodeAudioData 54 ms — 587 ms total, against the 250 ms this
- * constant started at. The fetch is now done at construction (see prefetch), so
- * only context creation + decode remain on the gesture: ~380 ms. 600 ms covers
- * that with margin on a slower device. A pull sound arriving a third of a second
- * into a drag that lasts far longer is still the pull; silence is not.
+ * constant started at. Fetching AND decoding now happen at construction (see
+ * the constructor), so the gesture pays only context creation + resume:
+ * ~330 ms. 600 ms covers that with margin on a slower device, and covers the
+ * engines that only honour the resume at the gesture's END (see play's
+ * statechange hold). A pull sound arriving a third of a second into a drag
+ * that lasts far longer is still the pull; silence is not.
  */
 const LATE_PLAY_MS = 600;
 
@@ -199,10 +201,26 @@ const LATE_PLAY_MS = 600;
 const MUTE_RAMP = 0.02;
 
 type Ctor = new () => AudioContext;
+type OfflineCtor = new (channels: number, length: number, rate: number) => OfflineAudioContext;
 
 export class Audio {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  /**
+   * The DOM-level unlock net: ONLY events that actually carry user activation
+   * (HTML spec's activation-triggering list; WebKit's User Activation post).
+   * A touch grants activation at touchEND, a mouse at mouseDOWN, pointerup
+   * covers the rest; `click` rides along because Howler has shipped it for a
+   * decade. touchstart and a touch's pointerdown are deliberately absent:
+   * they carry NO activation, and a resume() fired from one is parked on a
+   * promise that never settles (WebAudio spec issue #1759) — which is exactly
+   * how an iPhone ends up wedged on 'suspended' while the unlock ritual
+   * appears to run fine. Measured on an iPhone 17 Pro Max doing just that.
+   */
+  private static readonly UNLOCK_EVENTS = ['touchend', 'pointerup', 'mousedown', 'click', 'keydown'] as const;
+  private readonly tryUnlock = (): void => this.unlock();
+  /** whether the unlock net is currently listening */
+  private armed = false;
   /** decoded once per URL, so the three tick voices share one buffer */
   private buffers = new Map<string, AudioBuffer>();
   /** raw bytes, pulled at construction — see prefetch */
@@ -220,15 +238,81 @@ export class Audio {
   readonly dropped = new Map<VoiceName, number>();
 
   constructor() {
+    // iOS routes Web Audio through the RINGER category by default, so the
+    // silent switch mutes the whole game while the visuals play on — "sound
+    // doesn't work on my iPhone" with nothing else wrong, since most phones
+    // live on silent. The AudioSession API (Safari 16.4+) files the page
+    // under 'playback' — a game's actual category, the one video players and
+    // the real Duckies Pop app use — which the switch does not silence.
+    // Browsers without the API skip this and behave as before.
+    const session = (navigator as { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = 'playback';
     this.fetched = this.prefetch();
+    // Decode at BOOT, on an OfflineAudioContext — decoding is plain CPU work
+    // with no autoplay-policy involvement, and the buffers it yields play on
+    // any later context. Decoded on the unlock gesture instead, the whole cold
+    // start used to land inside the first level's opening shots: the probes
+    // measured an entire first flight silent (launch, bumps, explosions all
+    // requested while decode was in flight and expired past LATE_PLAY_MS) on a
+    // fast desktop, several shots' worth on a weak phone. 48 kHz to match the
+    // common device rate, so most playback is not resampled at all.
+    const w = window as unknown as {
+      OfflineAudioContext?: OfflineCtor; webkitOfflineAudioContext?: OfflineCtor;
+    };
+    const OAC = w.OfflineAudioContext ?? w.webkitOfflineAudioContext;
+    if (OAC) this.ready = this.decodeAll(new OAC(1, 1, 48000));
+    this.arm();
+    // WebKit parks a context on its non-standard 'interrupted' state for a
+    // phone call or a tab-away and does not reliably lift it on return
+    // (Phaser #5390, WebKit bug 263627) — so every return to the foreground
+    // pokes the context, and re-arms the gesture net in case the poke itself
+    // is refused and a fresh gesture has to finish the job.
+    const poke = (): void => {
+      if (!this.ctx || this.ctx.state === 'running') return;
+      this.arm();
+      void this.ctx.resume().catch(() => {});
+    };
+    window.addEventListener('focus', poke);
+    document.addEventListener('visibilitychange', poke);
   }
 
   /**
-   * Pull the clip bytes at construction — no AudioContext involved, so this
-   * touches nothing the autoplay policy cares about and can run at boot. It is
-   * here purely to get the 206 ms of fetching (measured, dev server) OFF the
-   * unlock gesture, where every millisecond delays the first sound the player
-   * hears. In the shipped single file these are data: URIs and it is near-free.
+   * Raise the unlock net: listen for the next activation-carrying gesture.
+   * Capture phase on the document, like every production unlocker — first to
+   * see the event and immune to anything a game handler does with it.
+   */
+  private arm(): void {
+    if (this.armed) return;
+    this.armed = true;
+    // passive: the unlock never calls preventDefault, and a NON-passive
+    // document-level touchend measurably wedges Chromium's injected-input
+    // path (CDP dispatchTouchEvent never acks — the touch harnesses hung on
+    // it); passive costs nothing and sidesteps that whole class
+    for (const ev of Audio.UNLOCK_EVENTS) {
+      document.addEventListener(ev, this.tryUnlock, { capture: true, passive: true });
+    }
+  }
+
+  /**
+   * Verified running: take the net down. Racing further resume() calls into
+   * WebKit is how unresolvable promises pile up, so retrying stops the moment
+   * the context is genuinely running — every production library removes its
+   * unlock listeners here. statechange re-arms if the context is ever parked.
+   */
+  private disarm(): void {
+    if (!this.armed) return;
+    this.armed = false;
+    for (const ev of Audio.UNLOCK_EVENTS) {
+      document.removeEventListener(ev, this.tryUnlock, { capture: true });
+    }
+  }
+
+  /**
+   * Pull the clip bytes at construction, feeding the boot-time decode above —
+   * plain fetches, nothing the autoplay policy cares about. Keeping the 206 ms
+   * of fetching (measured, dev server) off the unlock gesture is what lets the
+   * gesture pay for nothing but context creation. In the shipped single file
+   * these are data: URIs and it is near-free.
    */
   private async prefetch(): Promise<Map<string, ArrayBuffer>> {
     const out = new Map<string, ArrayBuffer>();
@@ -259,16 +343,24 @@ export class Audio {
   }
 
   /**
-   * Autoplay policy: a context created before a user gesture starts suspended
-   * and Chrome complains in the console, so nothing here touches Web Audio until
-   * the first pointerdown. Safe to call on every gesture — it builds the graph
-   * once and afterwards only nudges a context the browser re-suspended (which
-   * happens on tab-away). Never throws: a browser with no Web Audio just runs
-   * the ad silent.
+   * Autoplay policy: a LIVE context created before a user gesture starts
+   * suspended and Chrome complains in the console, so the live graph is not
+   * built until the first activation-carrying gesture reaches the net above
+   * (the boot-time decode uses an offline context, which the policy does not
+   * care about). Runs once per gesture while the context is anything but
+   * running: builds the graph the first time, afterwards resumes and re-kicks
+   * — the gesture that finally carries the activation is not knowable in
+   * advance, so each candidate gets the full ritual. Never throws: a browser
+   * with no Web Audio just runs the ad silent.
    */
-  unlock(): void {
+  private unlock(): void {
     if (this.ctx) {
-      if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => {});
+      if (this.ctx.state === 'running') {
+        this.disarm(); // already through — stop retrying into the engine
+        return;
+      }
+      void this.ctx.resume().catch(() => {});
+      this.kick(this.ctx);
       return;
     }
     const w = window as unknown as { AudioContext?: Ctor; webkitAudioContext?: Ctor };
@@ -281,6 +373,13 @@ export class Audio {
       return; // no context available: silent, but the ad keeps running
     }
     this.ctx = ctx;
+    // the net's whole lifecycle in one place: down while running, up while
+    // parked ('suspended' and WebKit's 'interrupted' alike), for the life of
+    // the page — an interruption mid-session re-arms it automatically
+    ctx.addEventListener('statechange', () => {
+      if (ctx.state === 'running') this.disarm();
+      else this.arm();
+    });
     const master = ctx.createGain();
     master.gain.value = this._muted ? 0 : MASTER_GAIN;
     // A chain generation can stack an explode over three tick voices; summed
@@ -297,10 +396,32 @@ export class Audio {
     limiter.connect(ctx.destination);
     this.master = master;
     if (ctx.state !== 'running') void ctx.resume().catch(() => {});
-    this.ready = this.decodeAll(ctx);
+    this.kick(ctx);
+    // the clips decoded at construction (offline context); this fallback only
+    // runs on an engine that shipped Web Audio without OfflineAudioContext
+    this.ready ??= this.decodeAll(ctx);
   }
 
-  private async decodeAll(ctx: AudioContext): Promise<void> {
+  /**
+   * The classic iOS unlock incantation: START A SOURCE inside the gesture.
+   * Real WebKit does not treat resume() alone as proof the page means to make
+   * sound — a context can report 'running' with the hardware route still shut,
+   * and every later play() is silently swallowed. One sample of silence
+   * straight to the destination, started within the gesture handler, is what
+   * actually opens the route. Costless and inaudible everywhere else.
+   */
+  private kick(ctx: AudioContext): void {
+    try {
+      const s = ctx.createBufferSource();
+      s.buffer = ctx.createBuffer(1, 1, 22050);
+      s.connect(ctx.destination);
+      s.start(0);
+    } catch {
+      // a browser that refuses the kick loses nothing but the ritual
+    }
+  }
+
+  private async decodeAll(ctx: BaseAudioContext): Promise<void> {
     const bytes = await this.fetched;
     await Promise.all([...bytes].map(async ([url, buf]) => {
       try {
@@ -333,18 +454,53 @@ export class Audio {
    * scale an impact by its speed.
    */
   play(name: VoiceName, opts: { gain?: number; rate?: number } = {}): void {
+    this.playHeld(name, opts, performance.now(), false);
+  }
+
+  /**
+   * play() plus the hold bookkeeping. `asked` is when the ORIGINAL request was
+   * made and travels through every replay unchanged, so the LATE_PLAY grace
+   * genuinely expires — re-stamping it per replay is how the page WEDGED: a
+   * clip whose fetch failed leaves its buffer missing for ever while `ready`
+   * is already resolved, so hold → replay → hold again was a synchronous
+   * microtask loop with a forever-fresh deadline, and the main thread never
+   * ran another frame (caught live under the debugger, stuck in play()).
+   * `replay` marks a request coming back from its own hold: a replay that
+   * STILL finds no buffer means the clip is never coming — drop it, once,
+   * with the warning the prefetch already printed.
+   */
+  private playHeld(
+    name: VoiceName, opts: { gain?: number; rate?: number }, asked: number, replay: boolean,
+  ): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const def = VOICES[name];
     const buf = this.buffers.get(def.url);
     if (!buf) {
-      // still decoding: hold the request briefly rather than lose the first grab
+      // still decoding: hold the request briefly rather than lose the first
+      // grab. ONE hold per request — see the doc above for why a second one
+      // must not happen.
       const ready = this.ready;
-      if (!ready) return;
-      const asked = performance.now();
+      if (!ready || replay) return;
       void ready.then(() => {
-        if (performance.now() - asked < LATE_PLAY_MS) this.play(name, opts);
+        if (performance.now() - asked < LATE_PLAY_MS) this.playHeld(name, opts, asked, true);
       });
+      return;
+    }
+    if (ctx.state !== 'running') {
+      // The graph exists but the browser has not let it run yet: the context
+      // was created inside this very gesture and resume() resolves async — or
+      // the engine is one that only honours the resume at the gesture's END
+      // (per spec a touch-backed pointerdown carries no user activation; the
+      // pointerup does). Same deal as the decode hold above: the sound plays
+      // if the context starts inside the grace, and is dropped as stale past
+      // it. Without this, every source started on a suspended context would
+      // pile up and fire as one burst at the moment it finally resumes.
+      // Re-arming here cannot loop — statechange only fires on a real state
+      // transition — and the original `asked` still bounds the total wait.
+      ctx.addEventListener('statechange', () => {
+        if (performance.now() - asked < LATE_PLAY_MS) this.playHeld(name, opts, asked, true);
+      }, { once: true });
       return;
     }
     const now = ctx.currentTime;

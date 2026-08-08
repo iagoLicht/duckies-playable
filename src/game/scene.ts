@@ -989,6 +989,15 @@ export class GameScene {
   private aimArrowId: number | null = null;
   /** pointerId that owns the current grab — other pointers are ignored */
   private activePointer: number | null = null;
+  /**
+   * Every pointer physically on the glass, grab or no grab. `activePointer`
+   * cannot stand in for this: a touch the board REFUSES (landed before
+   * boardReady, found no duck) never becomes the active pointer, and the idle
+   * demo would read the board as idle and start its gesture under a finger
+   * that is still pressed — measured doing exactly that on the opening board,
+   * where the demo's first gesture has no settle wait.
+   */
+  private pointersDown = new Set<number>();
   /** the bar's two digit tiles — the countdown's seconds, one roller each */
   private clockTiles: DigitRoller[] = [];
   private goalText!: Text;
@@ -1167,6 +1176,9 @@ export class GameScene {
   }
 
   private wireInput(): void {
+    // (No audio wiring here on purpose: the unlock is the Audio class's own
+    // DOM-level gesture net — see Audio.UNLOCK_EVENTS — armed at construction,
+    // ahead of and independent of everything Pixi dispatches below.)
     // Events are bound to the STAGE — it is the root, and its hitArea covers
     // the whole canvas including the letterbox margins the wall shows through.
     // Positions are read against `board`, which is where the ducks actually
@@ -1177,12 +1189,8 @@ export class GameScene {
     stage.eventMode = 'static';
     stage.hitArea = { contains: () => true };
     stage.on('pointerdown', (e) => {
-      // FIRST thing on every pointerdown, before any refusal below can return:
-      // browsers only let audio start from inside a user gesture, and in this
-      // game the first gesture IS the first aim grab. Doing it here means the
-      // grab that unlocks the context is also the one that gets to be heard.
-      this.audio.unlock();
-      // …and SECOND, before any refusal below can return: a touch always ends
+      this.pointersDown.add(e.pointerId);
+      // FIRST thing before any refusal below can return: a touch always ends
       // the idle demo. It runs on the same slingshot the player is about to
       // grab, so it has to let go before the handler asks for it — and because
       // the abort happens inside this same event, the touch that interrupts is
@@ -1230,6 +1238,7 @@ export class GameScene {
       this.director.slingshot.move(p.x, p.y);
     });
     const up = (e: { pointerId: number }): void => {
+      this.pointersDown.delete(e.pointerId);
       if (e.pointerId !== this.activePointer) return;
       this.activePointer = null;
       this.idleDemo?.poke();
@@ -1255,6 +1264,7 @@ export class GameScene {
     // while a grab is active, every later touch would be ignored: a bricked
     // playable. Registered once for the page's lifetime, like the stage's own.
     window.addEventListener('pointercancel', (e: PointerEvent) => {
+      this.pointersDown.delete(e.pointerId);
       if (e.pointerId !== this.activePointer) return;
       this.activePointer = null;
       this.idleDemo?.poke();
@@ -1664,7 +1674,10 @@ export class GameScene {
     this.idleDemo = new IdleDemo({
       get director(): Director { return scene.director; },
       ready: () => this.boardReady() && this.hitstop === 0 && this.endCard === null
-        && !this.director.slingshot.aiming && this.activePointer === null,
+        && !this.director.slingshot.aiming && this.activePointer === null
+        // …and no finger on the glass AT ALL, grabbed or refused — see
+        // pointersDown. A held touch is a player mid-thought, not an idle board.
+        && this.pointersDown.size === 0,
       grab: (): void => {
         // the same sound the player's grab makes, from the same event map entry:
         // the demo is showing the gesture, so it should sound like the gesture
