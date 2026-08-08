@@ -12,7 +12,7 @@ I focused on three core mechanics: Wall Bounce, Oysters, and Barrels. They are i
 
 The main industry trend I borrowed from is the Near Win / Near Miss structure. The first level is intentionally easier and designed to give the player a quick win. The second level is more challenging but still feels achievable, bringing the player very close to success before time runs out. The experience then ends with a loss popup and a Play Now CTA that redirects to the Duckies Pop store page.
 
-I added a 30-second timer on top of the game's tight move budget, so that time — not moves — is the limit that actually decides the run, creating more urgency. I also shortened the Ducky explosion and respawn flow to reduce downtime and better fit the faster pacing of the timed experience.
+I replaced the original move counter with a 30 second timer to create more urgency. I also shortened the Ducky explosion and respawn flow to reduce downtime and better fit the faster pacing of the timed experience.
 
 I tried to stay as close as possible to the original Duckies Pop gameplay loop, mechanics, UI, animations, and popups. At this stage, I believe a real gameplay playable is the better approach, since making the ad too different from the actual product could hurt downstream KPIs after install.
 
