@@ -1,5 +1,9 @@
 # Duckies Pop — playable ad
 
+> **Reviewing the home task?** Start with [SUBMISSION.md](SUBMISSION.md) —
+> the live link, the concept intro, the second-concept brief and the
+> iteration idea. This README is the engineering companion.
+
 A single-file HTML5 playable ad built on the Candivore *Duckies Pop* asset pack:
 a top-down bathtub where you sling ducks into each other, match colours to set
 off chain explosions, crack clams for pearls, and smash crates — on a move
