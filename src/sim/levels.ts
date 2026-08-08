@@ -34,6 +34,40 @@ export interface LevelDef {
   pearls: number;
   /** where respawning ducks may appear */
   spawnRegion: { x0: number; y0: number; x1: number; y1: number };
+  /**
+   * Clock-rig pacing (the ad's second beat). Steers respawn SUPPLY — which
+   * colour arrives, and where in the spawn region — toward finishing
+   * `targetLeft` pearls short at 0:00, so the loss lands as a near miss
+   * whatever the seed. Never touches payouts, physics or the clock; inert on
+   * any Director run with an infinite clock (the solvability gate, the
+   * tuner). See docs/superpowers/specs/2026-08-08-timer-lose-rigged-build-design.md
+   * and tests/tools/calibrate-clock.mjs, which chose the numbers.
+   */
+  pace?: {
+    /** pearls the ideal run is still short when the clock dies */
+    targetLeft: number;
+    /** pearls of pace error that saturate the steering */
+    spread: number;
+    /** odds cap, 0..1: a respawn colour pick is steered at full pressure */
+    colourGain: number;
+    /** 0..1: max shrink of the spawn window toward/away from the clams */
+    placeGain: number;
+    /**
+     * How far the aim assist breathes with the pace, in assist units at full
+     * pressure (behind → up, ahead → down, clamped to 0.15..0.75). The finale
+     * already cranks the assist mid-level, so a governed assist speaks the
+     * game's own language; 0 turns the dial off.
+     */
+    assistGain: number;
+    /**
+     * Extra seconds on the respawn debt at full AHEAD pressure. The batch
+     * still lands whole, on one beat, exactly as authored — it just falls due
+     * a breath later when the run is hot, so the next chain starts on a
+     * briefly thinner board. Behind-pressure never shortens the shipped
+     * RESPAWN_DELAY. 0 turns the dial off.
+     */
+    holdGain: number;
+  };
 }
 
 /**
@@ -497,11 +531,11 @@ export const LEVELS: LevelDef[] = [
   // (360,560) guards the mouth of the board and splits the approach into two
   // 36px-wide lanes. Below it the twin clams at 260 apart repeat level 5's
   // trick, but tighter: the both-at-once lens is only ~73px tall now. Behind
-  // those, a keystone, two corner crates, and the golden barrel buried at
+  // those, a keystone, two corner crates, and the deepest crate buried at
   // (360,1130) — five barrel-radii and three clams deep, reachable only once the
   // rest of the board has been dismantled. Because it is last,
   // Director.finaleArmed fires as it becomes the final goal and pushes assist to
-  // 0.9, so the ad's closing shot is a guaranteed, gold-showering hit.
+  // 0.9, so the ad's closing shot is a guaranteed hit.
   // The three clams are mutually close enough (255, 255 and 260 apart) that ANY
   // pair of them can fall to one perfectly placed pop — three different two-for-
   // one routes, none of them wide. That is the finale's skill ceiling.
@@ -518,10 +552,16 @@ export const LEVELS: LevelDef[] = [
   //    change put together.
   //  - targetDucks 6 (was 5) for the same reason: more ducks, more legal lines
   //    through 36px lanes. SUPERSEDED — see DUCK COUNT below.
-  // The clam triangle is untouched — it IS the level — and so is the golden
-  // barrel's burial spot. Every crate is now hp1, the golden included: with
-  // finaleArmed at assist 0.9 the closing shot lands, and one hit ends the ad on
-  // the gold shower rather than three.
+  // The clam triangle is untouched — it IS the level — and so is the deepest
+  // crate's burial spot. Every crate is hp1: with finaleArmed at assist 0.9 the
+  // closing shot lands, and one hit ends the ad rather than three.
+  //
+  // CRATE COLOUR: every crate here is the plain wooden skin (user-locked
+  // 2026-08-07). The buried one used to carry `golden: true`, which is purely a
+  // view flag — addBarrel swaps the rig to its 'yellow' skin — and left one
+  // yellow crate among four wooden ones. The level keeps its name and its
+  // finale; nothing but the skin changed. `golden` stays in the level schema,
+  // unused by any board, since it costs nothing and the rig still ships the art.
   // Budget intent: 4 crates + 6 pearls in 5 shots — the campaign's largest quota
   // off its smallest budget, and by far the densest board.
   //
@@ -543,6 +583,41 @@ export const LEVELS: LevelDef[] = [
   // a long time with no line worth taking. Nothing deadlocks (the softlock guard
   // covers that), but the unlucky run is now noticeably unluckier.
   //
+  // TOP CLAM REMOVED (user-set 2026-08-07): the guard shell at 360,560 is gone
+  // and the board runs on the two lower ones at y 780. Several notes below still
+  // describe the three-clam layout — they are the reasoning that produced the
+  // numbers, kept for that, not a description of the current board.
+  //
+  // QUOTA 30 -> 50 -> 35 -> 30 -> 40 (user-set 2026-08-07). 50 did not survive
+  // losing the third shell: two dispensers took a p50 of 32.3s against
+  // SIM.LEVEL_TICKS' 30, so the CLOCK bound the board rather than the budget and
+  // the bot cleared it 32/120. 120 seeds each, budget and clock enforced:
+  //   50 pearls   32/120   p50 13 shots / 32.3s
+  //   40 pearls   80/120   p50 10 shots / 23.2s   <- current
+  //   35 pearls   96/120   p50  9 shots / 21.7s
+  //   30 pearls  103/120   p50  8 shots / 19.4s
+  //
+  // 40 IS THE TIGHTEST OF THESE, and it is the MOVE budget that makes it so: of
+  // its 40 losses, 31 spent all 11 moves and only 9 ran the clock out. The same
+  // board at 12 moves scores 92/120 and hands the binding limit back to the
+  // clock (17 of 28 losses), at 13 moves 93/120 — so a thirteenth move buys
+  // almost nothing and twelve is the whole of the slack. Raise `moves` to 12 if
+  // this should sit with the other clam boards; leave it at 11 for a climax that
+  // genuinely runs the player out of shots.
+  //
+  // These are measured against a blast that OPENS SHELLS (see World.blast) — it
+  // roughly halved the shot counts on every clam level, so any older number in
+  // this file predates it. And the playthrough suite does not gate any of this:
+  // it runs unlimitedMoves and unlimitedTime, so it only ever asks whether a
+  // board is solvable at all.
+  //
+  // WHY A BIGGER QUOTA IS NOT SIMPLY HARDER: the quota gates WHEN THE CLAMS
+  // RETIRE, and their fling is this level's whole engine. Raising 30 -> 50 while
+  // three shells were still on the board made it FASTER (p50 9 -> 5 shots), by
+  // keeping the shells live for the second half instead of leaving the crates to
+  // be broken the slow way. That only holds while there are enough dispensers to
+  // serve the quota inside the clock — with two, 50 tipped the other way.
+  //
   // FLAGGED, not settled: even at 6 this is among the shortest boards in the
   // campaign, after an 8-shot Gauntlet, which is odd pacing for a climax. It is
   // also the level where the tuning bot's random spray benefits most from the
@@ -552,7 +627,7 @@ export const LEVELS: LevelDef[] = [
   {
     name: 'The Golden Pearl',
     moves: 11,
-    pearls: 30,
+    pearls: 31,
     assist: 0.4,
     targetDucks: 5,
     ducks: [
@@ -565,20 +640,42 @@ export const LEVELS: LevelDef[] = [
       { x: 360, y: 930, hp: 1 },
       { x: 170, y: 1060, hp: 1 },
       { x: 550, y: 1060, hp: 1 },
-      { x: 360, y: 1130, hp: 1, golden: true },
+      { x: 360, y: 1130, hp: 1 },
     ],
     clams: [
       // NOT the 'baby' skin: its shell art is 124x131 against the 112px
       // collision diameter every clam has, so a baby clam bounces ducks and
       // stops the aim guide ~20px out in open water. Until CLAM_R is per-skin,
       // only 'normal' and 'gold' (198x188) match the hitbox.
-      { x: 360, y: 560 },
-      { x: 230, y: 780 },
-      { x: 490, y: 780 },
+      //
+      // 350px apart (was 260): at 260 a duck ping-ponged between the shells
+      // and milked a pearl per touch — every-hit-pays is the clam bug fix and
+      // stays — which was the fat lucky-win tail no pace steering could reach
+      // (a surviving duck books no respawn, so the governor never gets a
+      // decision). Measured at 250 clocked seeds: widening alone cut bot wins
+      // from ~50% to ~17% at this quota band, and freed the crate lanes so
+      // ~90% of losses now end with every crate down.
+      { x: 185, y: 780 },
+      { x: 535, y: 780 },
     ],
-    // reaches down past the guard clam into the middle chamber: freeSpot() keeps
+    // reaches down through where the guard clam used to sit, into the middle
+    // chamber: freeSpot() keeps
     // every sample a duck-radius clear of the clams, so the extra band is real
     // water, not a hole the respawn drops ducks into
     spawnRegion: { x0: 140, y0: 310, x1: 600, y1: 700 },
+    // THE AD'S RIGGED ENDING (timer-lose build). The clock takes this board,
+    // and the pace governor steers respawn supply so it takes it CLOSE.
+    // Quota-only tuning measured hopeless — near-miss quotas won 70%+, losing
+    // quotas missed by 8-15 — hence the governor plus the clam spacing above;
+    // the reasoning lives in
+    // docs/superpowers/specs/2026-08-08-timer-lose-rigged-build-design.md.
+    //
+    // Locked by tests/tools/calibrate-clock.mjs at 400 clocked seeds: the
+    // distracted thumb wins 17%, the focused variant 12%; every loss is the
+    // clock's (never the move budget), ~90% end with all crates down, and the
+    // pearl counter dies at p25/p50/p75 = 3/5/8 short for the noisy bot — real
+    // players also get the assist breathing below, which the bot's aim-hunt
+    // cannot feel. Guarded by tests/sim/rigged.test.ts.
+    pace: { targetLeft: 3, spread: 2, colourGain: 1.0, placeGain: 0.85, assistGain: 0.25, holdGain: 2.2 },
   },
 ];

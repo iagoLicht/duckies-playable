@@ -1,7 +1,7 @@
 import { SIM } from './config';
 import { mulberry32, type Rng } from './rng';
 import { collideCircle } from './shapes';
-import type { Barrel, Clam, Colour, Duck, SimEvent } from './types';
+import type { Barrel, Clam, Colour, Duck, Pearl, SimEvent } from './types';
 
 /**
  * Pure simulation world. Deterministic: all randomness via the seeded rng,
@@ -13,6 +13,8 @@ export class World {
   readonly ducks: Duck[] = [];
   readonly barrels: Barrel[] = [];
   readonly clams: Clam[] = [];
+  /** pearls in the air, each on its own flight clock — see tickClams */
+  readonly pearls: Pearl[] = [];
   readonly events: SimEvent[] = [];
   time = 0;
   /** 0 while a fresh shot flies untouched (light drag); 1 after its first contact */
@@ -28,6 +30,7 @@ export class World {
       id: this.nextId++, kind: 'duck', colour, x, y, vx: 0, vy: 0,
       live: false, popping: false, matched: false, matchFuse: 0,
       popOnSettle: false, settleTicks: 0, ticksMoving: 0,
+      shotStrikePending: false,
     };
     this.ducks.push(d);
     this.events.push({ type: 'duckSpawned', duck: d });
@@ -39,7 +42,7 @@ export class World {
     const capped = Math.max(1, Math.min(3, hp));
     const b: Barrel = {
       id: this.nextId++, kind: 'barrel', skin, x, y,
-      hp: capped, maxHp: capped, golden, hitCooldown: 0,
+      hp: capped, maxHp: capped, golden, hitCooldown: 0, hitBy: 0,
     };
     this.barrels.push(b);
     this.events.push({ type: 'barrelSpawned', barrel: b });
@@ -49,7 +52,7 @@ export class World {
   spawnClam(x: number, y: number, skin: Clam['skin'] = 'normal'): Clam {
     const c: Clam = {
       id: this.nextId++, kind: 'clam', x, y, skin,
-      open: false, cycleTicks: 0, active: true, hitCooldown: 0,
+      open: false, cycleTicks: 0, active: true, hitThisStep: [],
     };
     this.clams.push(c);
     this.events.push({ type: 'clamSpawned', clam: c });
@@ -57,22 +60,36 @@ export class World {
   }
 
   /**
-   * Trigger a clam: a hard direct hit or a blast reaching it. Starts ONE open
-   * cycle — open, spill a single pearl, shut, re-arm — and is refused while a
-   * cycle is already running or once the clam has gone inert. That refusal is
-   * what guarantees "exactly one pearl per successful interaction": a blast that
-   * also lands a duck on the shell, or two blast generations overlapping, still
-   * only ever yields one.
+   * Trigger a clam. EVERY hit runs the whole routine — the shell jolts open, a
+   * pearl comes out, the lid's shut-eye art reads as the blink — and the only
+   * thing that refuses is a SPENT shell, whose quota is met.
+   *
+   * IT USED TO REFUSE WHILE OPEN, and that gate is the reported bug (measured:
+   * over 10 levels x 15 bot seeds, 2523 of 5245 physical duck-on-shell contacts
+   * — 48% — produced no routine at all, and every one of them was this gate.
+   * Half were a different duck arriving while the first duck's cycle ran.) The
+   * cycle is 60 ticks, a full second: for a second after any hit the shell flung
+   * ducks away with its bump sound and did nothing else, which is exactly the
+   * "sometimes it just doesn't react" the player sees. `open` is the shell's
+   * POSE, not a busy flag, so a hit landing mid-cycle simply restarts it.
+   *
+   * ONE impact frame: the shell's squash, its opening and the pearl all start
+   * here, on the same tick the duck is flung away. Nothing is staged behind a
+   * delay — the view reads both of these events off the same drain.
+   *
+   * The pearl gets its own id and its own flight clock (see tickClams), because
+   * re-opening mid-cycle means two pearls from one shell can be in the air at
+   * once. What guarantees one pearl per HIT is not this method — it is the
+   * caller's substep debounce in collideDuckClams.
    */
   hitClam(c: Clam): void {
-    if (!c.active || c.open) return;
+    if (!c.active) return;
     c.open = true;
     c.cycleTicks = 0;
-    // ONE impact frame: the shell's squash, its opening and the pearl all start
-    // here, on the same tick the duck is flung away. Nothing is staged behind a
-    // delay — the view reads both of these events off the same drain.
+    const pearl = this.nextId++;
+    this.pearls.push({ id: pearl, clam: c.id, ticks: 0 });
     this.events.push({ type: 'clamOpened', id: c.id, x: c.x, y: c.y });
-    this.events.push({ type: 'pearlReleased', id: c.id, x: c.x, y: c.y });
+    this.events.push({ type: 'pearlReleased', id: c.id, pearl, x: c.x, y: c.y });
   }
 
   /** Retire every clam: still solid, still visible, but no longer reactive. */
@@ -82,27 +99,45 @@ export class World {
   }
 
   /**
-   * Drive each open clam through its cycle. The spill is NOT here — it happens
-   * on the impact tick in hitClam, so the hit reads as one event. What is left
-   * runs on tick counts that live in SIM, so the view animates off the same
-   * numbers rather than re-deriving them:
+   * Drive each open shell through its cycle, and each pearl through its flight.
+   * The spill is NOT here — it happens on the impact tick in hitClam, so the hit
+   * reads as one event. What is left runs on tick counts that live in SIM, so
+   * the view animates off the same numbers rather than re-deriving them:
+   *   CLAM_CYCLE_TICKS    the shell shuts (a fresh hit restarts the count)
    *   PEARL_FLIGHT_TICKS  the pearl reaches the HUD -> the counter drops by 1
-   *   CLAM_CYCLE_TICKS    the shell shuts and the clam is armed again
+   *
+   * The two are counted SEPARATELY. The pearl used to ride the shell's
+   * `cycleTicks`, which was safe only while a shell could not re-open mid-cycle:
+   * now that every hit pays out, a second hit resetting that counter would have
+   * stranded the first pearl in the air with its arrival never announced — the
+   * view holds each pearl just short of the counter until the sim says it landed.
+   *
+   * This is also where the per-step contact debounce is cleared, so the window
+   * is exactly one fixed step: the substep loop counts a collision once, and the
+   * next step's contact is free to run the routine again.
    */
   private tickClams(): void {
     for (const c of this.clams) {
-      if (c.hitCooldown > 0) c.hitCooldown--;
+      c.hitThisStep.length = 0;
       if (!c.open) continue;
       c.cycleTicks++;
-      if (c.cycleTicks === SIM.PEARL_FLIGHT_TICKS) {
-        this.events.push({ type: 'pearlCollected', id: c.id });
-      }
       if (c.cycleTicks >= SIM.CLAM_CYCLE_TICKS) {
         c.open = false;
         c.cycleTicks = 0;
         this.events.push({ type: 'clamClosed', id: c.id });
       }
     }
+    // compacted in place, forwards, so arrivals are announced in the order the
+    // pearls were spilled — the counter drops for the oldest one first
+    let kept = 0;
+    for (const p of this.pearls) {
+      if (++p.ticks < SIM.PEARL_FLIGHT_TICKS) {
+        this.pearls[kept++] = p;
+        continue;
+      }
+      this.events.push({ type: 'pearlCollected', id: p.clam, pearl: p.id });
+    }
+    this.pearls.length = kept;
   }
 
   launch(id: number, vx: number, vy: number): void {
@@ -112,6 +147,9 @@ export class World {
     d.vy = vy;
     d.live = true;
     d.ticksMoving = 0;
+    // the player aimed this shot at a duck, so the duck it reaches first is
+    // owed a full-strength hit however oblique the contact turns out to be
+    d.shotStrikePending = true;
     this.phase = 0; // the new shot flies clean until it touches something
     this.events.push({ type: 'duckLaunched', id });
   }
@@ -135,6 +173,10 @@ export class World {
         d.vx = 0;
         d.vy = 0;
         d.ticksMoving = 0;
+        // a shot that ran out of momentum without reaching a duck has spent its
+        // strike: the privilege belongs to the shot in flight, not to the duck
+        // it leaves sitting there
+        d.shotStrikePending = false;
         if (d.live) {
           d.live = false;
           this.events.push({ type: 'duckStopped', id: d.id });
@@ -184,42 +226,39 @@ export class World {
     // (the step snaps sub-STOP_SPEED motion to exactly zero) for a whole
     // confirmation hold — the player watches it flash, sees it come to rest,
     // and only then does it go. Contact matches additionally burn their full
-    // fuse first, so a pair that was already sitting still keeps the classic
-    // 1.5s blink; a blast victim's blink lasts however long it takes to
+    // fuse first, so a pair that was already sitting still blinks for the whole
+    // MATCH_FUSE_TICKS; a blast victim's blink lasts however long it takes to
     // settle. The fuse keeps counting into the negatives meanwhile, which
     // keeps the blink bands alternating however long that is, and drag
     // guarantees every duck does come to rest.
     //
-    // ONE BANG, NOT A DRUM ROLL (user-locked 2026-08-07). Readiness is still
-    // decided per duck, but the pop is not: the whole doomed set is held until
-    // the LAST of them is ready and then goes off on a single frame. Each duck
-    // firing the moment it personally settled meant a blast that caught four
-    // ducks paid out as four separate bangs spread over a second, because the
-    // knock sends every victim a different distance. The set is the chain's
-    // GENERATION — a pop's blast dooms its neighbours, and they are flagged
-    // after this pass, so they wait out their own slide and detonate together
-    // as the next generation. Chains still read as chains; each rung is one
-    // bang instead of a stutter.
+    // EVERY DUCK ON ITS OWN CLOCK (user-locked 2026-08-08, replacing the
+    // one-bang rule of 2026-08-07). A doomed duck pops as soon as IT is ready
+    // and waits for nothing else on the board. It was previously held until the
+    // last of its generation was ready so a blast that caught four paid out as a
+    // single bang; that cost a chain the time of its slowest victim on every
+    // rung, and this is an ad, where those tenths are the whole budget. The
+    // stutter that rule was written to remove is accepted: the fuse is 0.6s now
+    // rather than the official 1.5s, so the spread between victims is far
+    // smaller than it was when the trade was first made.
     //
     // This terminates: nothing new can be doomed without a pop or a contact,
-    // drag brings every duck to rest, and the fuse counts past zero — so a set
+    // drag brings every duck to rest, and the fuse counts past zero — so a duck
     // that is merely waiting always becomes ready.
     //
     // Decide-then-pop, in two passes, for the same reason it always was: a
     // pop's blast SHOVES its neighbours, so deciding inside the pop loop would
-    // let the first pop knock a partner's hold back to zero.
-    const doomed: Duck[] = [];
-    let ready = true;
+    // let the first pop knock a duck already judged ready back to zero — and
+    // which ducks that hit would depend on iteration order.
+    const ready: Duck[] = [];
     for (const d of this.ducks) {
       if (!d.matched || d.popping) continue;
       d.matchFuse--; // drives the blink band; runs past 0 while settling
       d.settleTicks = d.vx === 0 && d.vy === 0 ? d.settleTicks + 1 : 0;
       const held = d.settleTicks >= SIM.BLAST_SETTLE_CONFIRM_TICKS;
-      doomed.push(d);
-      if (!held || !(d.popOnSettle || d.matchFuse <= 0)) ready = false;
+      if (held && (d.popOnSettle || d.matchFuse <= 0)) ready.push(d);
     }
-    if (!ready) return;
-    for (const d of doomed) {
+    for (const d of ready) {
       if (!d.popping) this.popDuck(d);
     }
   }
@@ -303,6 +342,37 @@ export class World {
           const imp = (-(1 + SIM.RESTITUTION_BODY) * rel) / 2;
           a.vx -= imp * nx; a.vy -= imp * ny;
           b.vx += imp * nx; b.vy += imp * ny;
+          // THE PLAYER'S SHOT LANDS AT FULL STRENGTH (user-locked 2026-08-07).
+          //
+          // The impulse above is the ordinary equal-mass one, so what it hands
+          // the target scales with `rel` — the NORMAL component of the approach.
+          // A shot that catches its target off-centre therefore barely moved it:
+          // measured over 1045 campaign shots, a graze sent the duck away at a
+          // quarter of what a dead-centre hit did (see SIM.SHOT_STRIKE_SPEED).
+          // The player aimed at that duck, so the angle should choose the
+          // DIRECTION it leaves in and nothing else.
+          //
+          // The target's velocity is REPLACED, not added to — "always the same
+          // strength" cannot survive being summed with whatever drift the duck
+          // already had. The shooter keeps the ordinary impulse it just took;
+          // this deliberately does not conserve momentum, because it is a feel
+          // rule, not a physical one.
+          //
+          // ONE contact per shot. The flag is spent here, so the carom, the
+          // struck duck's own collisions and every chain generation downstream
+          // fall straight back to the plain impulse — which is what keeps a
+          // chain reading as a consequence rather than as a second shot.
+          const striker = a.shotStrikePending ? a : (b.shotStrikePending ? b : null);
+          if (striker) {
+            const target = striker === a ? b : a;
+            // the normal runs a -> b, so it points INTO b and away from a
+            const sx = striker === a ? nx : -nx;
+            const sy = striker === a ? ny : -ny;
+            target.vx = sx * SIM.SHOT_STRIKE_SPEED;
+            target.vy = sy * SIM.SHOT_STRIKE_SPEED;
+            a.shotStrikePending = false;
+            b.shotStrikePending = false;
+          }
           // Report the contact. NO cooldown state here, unlike the barrels and
           // clams, because the impulse above is self-debouncing: it only runs on
           // rel < 0 and leaves rel = -RESTITUTION_BODY·rel > 0, i.e. separating,
@@ -354,15 +424,43 @@ export class World {
           // official bounceOffStatic: plain normal reflection at half energy
           d.vx -= (1 + SIM.RESTITUTION_STATIC) * vn * nx;
           d.vy -= (1 + SIM.RESTITUTION_STATIC) * vn * ny;
-        }
-        // ANY duck, any colour, launched or knocked: approaching faster than
-        // the threshold chips exactly one stage. vn < 0 restricts this to real
-        // approaches (a still-overlapping duck drifting AWAY doesn't re-hit),
-        // and the cooldown keeps one physical collision from counting twice
-        // across substeps or contact jitter.
-        if (vn < -SIM.BARREL_HIT_SPEED && b.hitCooldown === 0) {
-          b.hitCooldown = SIM.BARREL_HIT_COOLDOWN_TICKS;
-          this.damageBarrel(b, 1);
+          // A CRATE THAT IS TOUCHED ALWAYS FLINCHES. Reported here, on the
+          // bounce itself, and NOT down in the damage branch below — that
+          // branch answers "did this cost it a stage", which is a different
+          // question with a speed bar and a cooldown on it. Hanging the flinch
+          // off it meant a glancing touch, or a second duck arriving within
+          // 0.2s of the first, bounced off a crate that did not move: 70 of 705
+          // campaign contacts, one of them at 1880 px/s.
+          //
+          // No cooldown of its own, for the reason duck-duck needs none: the
+          // resolver has just snapped the duck out to exactly `minD` and turned
+          // vn positive, so the pair is separating and the next of the 2-16
+          // adaptive substeps finds them apart and cannot re-fire. Measured
+          // 706 firings across 705 physical collisions.
+          this.events.push({ type: 'barrelBumped', id: b.id, x: d.x, y: d.y, speed: -vn });
+          // A TOUCH IS A TOUCH: every contact costs a stage (user-locked
+          // 2026-08-07). This sits INSIDE the bounce, on the same `vn < 0` the
+          // bounce and the flinch use, because there is only one question here
+          // — did a duck reach this crate — and it should only ever be asked
+          // once. It used to sit outside on its own bar, `vn < -90`, and `vn`
+          // is the NORMAL component: a duck arriving hard but shallow carries
+          // most of its speed tangentially, so it cleared no bar and bounced
+          // off a crate it had not scratched. Measured over a head-on..grazing
+          // sweep: silent at 200px/s dead centre, and silent at 1400px/s on a
+          // graze. The floor now is STOP_SPEED, which the sim already enforces
+          // by snapping anything slower to exactly zero — a duck resting
+          // against a crate has vn == 0 and is not approaching at all.
+          //
+          // The debounce is per DUCK. Keyed on the barrel alone it swallowed a
+          // second duck's separate hit for a fifth of a second (25 of 70 silent
+          // contacts in the campaign measurement); keyed on the pair it still
+          // does the only job it was ever for, which is stopping ONE physical
+          // collision counting twice across the 2-16 adaptive substeps.
+          if (b.hitCooldown === 0 || b.hitBy !== d.id) {
+            b.hitCooldown = SIM.BARREL_HIT_COOLDOWN_TICKS;
+            b.hitBy = d.id;
+            this.damageBarrel(b, 1);
+          }
         }
       }
     }
@@ -371,14 +469,14 @@ export class World {
   /**
    * Clams are solid bumpers whether shut, open or spent (the rig IS the game's
    * bumper), so this ALWAYS bounces — the deflection is level geometry and must
-   * not change when a clam goes inert. A hard enough approach — the same speed
-   * bar a match needs — additionally triggers an armed one, mirroring the
-   * official's `caseContact`: bounce off static, then hit the case if the
-   * approach was fast.
+   * not change when a clam goes inert. Any approach at all additionally triggers
+   * an armed one, mirroring the official's `caseContact`: bounce off static,
+   * then hit the case.
    *
-   * The cooldown is the same guard the barrels use: adaptive substepping runs
-   * this up to 16 times per fixed step, and contact jitter can re-approach, so
-   * without it one physical collision could spend two pearls.
+   * The debounce is per duck and lasts exactly one fixed step: adaptive
+   * substepping runs this up to 16 times per step, so without it one physical
+   * collision could spend two pearls. Deliberately no longer than that — see
+   * the note on the trigger itself.
    */
   private collideDuckClams(): void {
     for (const d of this.ducks) {
@@ -411,22 +509,30 @@ export class World {
             d.vy *= f;
           }
           this.events.push({ type: 'bumperHit', id: c.id, x: d.x, y: d.y });
-          // ONE CONTACT, ONE PEARL. The shell reacting and the shell paying out
-          // are the same event, so they are decided by the same test — this sits
-          // inside the react rather than beside it.
+          // ONE CONTACT, ONE ROUTINE, EVERY TIME. The shell reacting and the
+          // shell paying out are the same event, so they are decided by the same
+          // test — this sits inside the react rather than beside it, and there
+          // is now nothing left in the test but "is this shell still armed".
           //
-          // It used to sit outside, gated on vn < -CLAM_HIT_SPEED while the
-          // react only needed vn < 0. Two bars for one contact, and `vn` is the
-          // NORMAL component: a duck arriving hard but glancing, or catching the
-          // shell from behind, carries most of its speed tangentially and clears
-          // the first bar while missing the second. The shell visibly reacted
-          // and no pearl came out. Direction and strength decided the payout
-          // when only "did it touch an armed shell" ever should have.
+          // Two gates have been removed from here, both for the same reason: a
+          // duck reached the shell, the shell visibly reacted, and nothing came
+          // out. First `vn < -CLAM_HIT_SPEED`, which read the NORMAL component,
+          // so a duck arriving hard but glancing cleared the react's bar and
+          // missed the payout's. Then `!c.open`, the whole 60-tick cycle, which
+          // was 48% of every contact the bot made across the campaign — the
+          // shell simply ignored the second duck for a full second.
           //
-          // What still refuses is unchanged and deliberate: a shell mid-cycle
-          // (one pearl per cycle) or spent (quota met). Neither is a valid hit.
-          if (c.hitCooldown === 0 && c.active && !c.open) {
-            c.hitCooldown = SIM.CLAM_HIT_COOLDOWN_TICKS;
+          // What is left is the substep debounce and nothing else: the collision
+          // runs 2-16 times per fixed step, so ONE physical collision can
+          // register as an approach twice inside a step (measured: 15 of 5353).
+          // Keyed per DUCK and cleared every step in tickClams, so it can only
+          // ever swallow the duplicate — never a second duck, and never the same
+          // duck's next real approach, which is the mistake the removed gates
+          // both made. 95% of contacts now run the routine and the rest are
+          // shells the level has already spent; reproduce the before/after with
+          // shots/probe-clam-misses.mjs and shots/probe-clam-verify.mjs.
+          if (c.active && !c.hitThisStep.includes(d.id)) {
+            c.hitThisStep.push(d.id);
             this.hitClam(c);
           }
         }
@@ -484,14 +590,23 @@ export class World {
         this.damageBarrel(b, 1);
       }
     }
-    // Clams are deliberately NOT in the blast. A blast reaches BLAST_R from the
-    // pop's centre, so opening shells here made a duck exploding NEAR a shell
-    // jolt it open with nothing touching it — the shell moved, opened and paid
-    // out on proximity alone. Measured over real play: 1266 of 2114 pearls came
-    // out that way, from as far as 135px.
+    // A POP OPENS THE SHELLS IT CATCHES (user-set 2026-08-07). Same reach and
+    // same test as the barrels above — pure centre distance <= BLAST_R — and the
+    // same routine a duck landing on the shell runs, so a caught clam jolts open
+    // and spills exactly one pearl.
     //
-    // The shell now answers to one thing only: a duck actually reaching it, in
-    // collideDuckClams. Barrels above still take the blast — they are struck
-    // goals, not contact bumpers, and nothing about them was in question.
+    // This reverses an earlier removal, and the reasoning that removed it still
+    // holds as a description: a blast reaches BLAST_R 135 from the pop's centre
+    // against a CLAM_R of 56, so a shell can be opened by a duck that never came
+    // within ~79px of it, and when this last shipped 1266 of 2114 pearls came out
+    // on proximity rather than contact. That is now the intended behaviour: the
+    // explosion is meant to crack shells near it, not only under it.
+    //
+    // No debounce needed, unlike collideDuckClams: blast() is called once per
+    // pop from tickFuses, not per substep, so one detonation cannot pay twice.
+    // hitClam already refuses a spent shell.
+    for (const c of this.clams) {
+      if (Math.hypot(c.x - x, c.y - y) <= SIM.BLAST_R) this.hitClam(c);
+    }
   }
 }

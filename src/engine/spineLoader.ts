@@ -93,3 +93,54 @@ export function makeSpine(data: SkeletonData): Spine {
   spine.autoUpdate = false;
   return spine;
 }
+
+/**
+ * A free-list of Spine instances for one rig. Constructing a Spine clones the
+ * full bone/slot/attachment tree — measured at 150-360ms for a board's worth on
+ * a weak phone, which is exactly the level-load and respawn-batch hitch — so
+ * boards acquire prewarmed rigs and give them back instead of destroying them.
+ *
+ * release() rewinds everything acquire()-side code configures (tracks, pose,
+ * timeScale, transform hook, alpha/rotation/visibility) so a reused rig is
+ * indistinguishable from a fresh makeSpine() — the add-view methods then apply
+ * skin, animations and placement exactly as they always did.
+ */
+export class SpinePool {
+  private readonly free: Spine[] = [];
+  /** membership guard: a stale animation closure double-releasing a rig would
+   *  otherwise hand the same instance to two boards at once */
+  private readonly pooled = new Set<Spine>();
+
+  constructor(private readonly data: SkeletonData) {}
+
+  prewarm(n: number): void {
+    while (this.free.length < n) {
+      const s = makeSpine(this.data);
+      this.free.push(s);
+      this.pooled.add(s);
+    }
+  }
+
+  acquire(): Spine {
+    const s = this.free.pop();
+    if (s) {
+      this.pooled.delete(s);
+      return s;
+    }
+    return makeSpine(this.data);
+  }
+
+  release(s: Spine): void {
+    if (s.destroyed || this.pooled.has(s)) return;
+    s.removeFromParent();
+    s.state.clearTracks();
+    s.state.timeScale = 1;
+    s.skeleton.setToSetupPose();
+    s.beforeUpdateWorldTransforms = () => {};
+    s.visible = true;
+    s.alpha = 1;
+    s.rotation = 0;
+    this.free.push(s);
+    this.pooled.add(s);
+  }
+}

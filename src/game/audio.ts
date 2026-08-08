@@ -139,8 +139,11 @@ const VOICES: Record<VoiceName, VoiceDef> = {
   // is the FMOD entry's reading too ("fired duck lands and is added into the
   // water cluster").
   duckSettle: { url: spawnSplooshUrl, gain: 1.27, minGapMs: 90, maxVoices: 3, jitter: 0.06 },
-  // event map: "candy jar hit" -> barrelDamaged. Our crate is this game's
-  // destructible goal entity, i.e. the candy's role.
+  // event map: "candy jar hit" -> barrelBumped (and barrelDamaged when a blast,
+  // which touches nothing, takes a stage). Our crate is this game's destructible
+  // goal entity, i.e. the candy's role. It rides the contact rather than the
+  // damage now, so it plays on every touch — scaled by impactGain, and the
+  // minGap/maxVoices below stop a cluster of crates from stacking clicks.
   crateHit: { url: candyHitUrl, gain: 0.35, minGapMs: 120, maxVoices: 2, jitter: 0.06 },
   // event map: "candy (goal) is smashed" -> barrelDestroyed
   crateSmash: { url: candySmashUrl, gain: 0.72, minGapMs: 90, maxVoices: 3, jitter: 0.06 },

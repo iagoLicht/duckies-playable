@@ -1,16 +1,24 @@
-// dist/index.html (everything inlined by vite) -> dist/duckies-pop-playable.html:
+// dist/index.html (everything inlined by vite) -> dist/<name>.html:
 // a gzip self-extractor, the same technique as the reference examples (~45% smaller).
 // The plain dist/index.html is kept as a no-DecompressionStream fallback deliverable.
+//
+// DP_OUT_NAME picks the artifact's basename — ad networks identify a campaign
+// variant by its file name (e.g. duckies_timer_lose_rigged), the content is the
+// repo's one ad either way.
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
 const src = 'dist/index.html';
-const out = 'dist/duckies-pop-playable.html';
+const out = `dist/${process.env.DP_OUT_NAME ?? 'duckies-pop-playable'}.html`;
 
 // The "single file" claim only holds if vite inlined everything — fail loudly if
-// any asset escaped into dist/ as a sibling file.
-const stray = fs.readdirSync('dist').filter((f) => f !== 'index.html' && f !== path.basename(out));
+// any asset escaped into dist/ as a sibling file. Other .html files are prior
+// pack outputs under other DP_OUT_NAMEs, not escaped assets (assets are
+// images/audio/fonts and would never land as .html).
+const stray = fs.readdirSync('dist').filter(
+  (f) => f !== 'index.html' && f !== path.basename(out) && !f.endsWith('.html'),
+);
 if (stray.length > 0) {
   console.error(`FAIL: build is not self-contained, stray files in dist/: ${stray.join(', ')}`);
   process.exit(1);

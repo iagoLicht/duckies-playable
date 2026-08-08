@@ -10,6 +10,16 @@ export interface Duck {
   vy: number;
   /** true from launch until it comes to rest — pops/damage need a live duck */
   live: boolean;
+  /**
+   * This duck is a player's shot that has not yet reached a duck.
+   *
+   * Set by launch(), spent by the first duck-duck contact it makes, and dropped
+   * if the shot comes to rest without reaching one — the strike belongs to the
+   * shot in flight, never to the duck afterwards. It is what tells
+   * collideDuckPairs which single contact per shot gets SHOT_STRIKE_SPEED
+   * instead of the ordinary impulse.
+   */
+  shotStrikePending: boolean;
   /** fixed steps spent moving — drives the flight-drag ramp; reset on launch/stop */
   ticksMoving: number;
   /** set the instant the duck leaves the world, so it can't be popped twice */
@@ -34,16 +44,26 @@ export interface Barrel {
   hp: number;
   maxHp: number;
   golden: boolean;
-  /** fixed-step ticks before contact damage can land again — one hit per collision */
+  /** fixed-step ticks left debouncing ONE duck's collision — see hitBy */
   hitCooldown: number;
+  /**
+   * Which duck `hitCooldown` is debouncing. The window exists only to stop a
+   * single physical collision counting twice across the 2-16 adaptive substeps
+   * — never to swallow a second duck's separate hit, so a different id always
+   * lands. 0 = nobody.
+   */
+  hitBy: number;
 }
 
 /**
  * The clam (the pack's oyster rig). A REPEATABLE pearl dispenser, not a one-shot
- * goal: a duck striking it hard enough, or a blast reaching it, opens the shell,
- * which spills exactly one pearl, then shuts and re-arms. It is solid at all
- * times — open, shut or spent it bounces ducks, because the rig is the game's
- * bumper ("GameEntityBumper renders as this oyster", asset manifest).
+ * goal: a duck reaching the shell opens it, which spills a pearl, then shuts and
+ * re-arms. It is solid at all times — open, shut or spent it bounces ducks,
+ * because the rig is the game's bumper ("GameEntityBumper renders as this
+ * oyster", asset manifest).
+ *
+ * THE SHELL IS NEVER BUSY: `open` is the shell's POSE, not a latch. A hit
+ * landing mid-cycle restarts the cycle and spills another pearl — see hitClam.
  *
  * Once the level's pearl goal is met every clam goes `active: false`: still
  * solid, still visible, but inert — no open beat and no further pearls.
@@ -54,14 +74,37 @@ export interface Clam {
   x: number;
   y: number;
   skin: 'normal' | 'gold' | 'baby';
-  /** true for the whole open cycle — an open clam cannot be re-triggered */
+  /** the shell is up and the mouth showing; re-hitting an open shell re-opens it */
   open: boolean;
-  /** fixed steps elapsed in the current cycle; drives spill, collect and shut */
+  /** fixed steps since the shell last opened; at CLAM_CYCLE_TICKS it shuts */
   cycleTicks: number;
   /** false once the pearl goal is met: a plain solid bumper from then on */
   active: boolean;
-  /** one physical collision opens the shell once, across substeps and jitter */
-  hitCooldown: number;
+  /**
+   * Ducks whose collision has already been counted THIS fixed step — the whole
+   * debounce, and deliberately no more than that. Adaptive substepping runs the
+   * clam collision 2-16 times per step, so ONE physical collision can register
+   * as an approach twice inside a step; it must never swallow the next step's
+   * contact, which is a hit the player watched land. Cleared in tickClams.
+   */
+  hitThisStep: number[];
+}
+
+/**
+ * A pearl in the air between the shell that spilled it and the HUD counter.
+ *
+ * It carries its OWN flight clock rather than riding the shell's cycle, because
+ * a shell can spill again while the last pearl is still climbing — every hit
+ * pays out, so two pearls from one clam overlap routinely. Timed off the shell,
+ * the first pearl's arrival would be lost when the second restarted the cycle:
+ * it would hang in the air and the counter would never move for it.
+ */
+export interface Pearl {
+  id: number;
+  /** the shell it came out of — the view needs it for nothing but bookkeeping */
+  clam: number;
+  /** fixed steps flown; at SIM.PEARL_FLIGHT_TICKS it reaches the counter */
+  ticks: number;
 }
 
 export type SimEvent =
@@ -82,17 +125,29 @@ export type SimEvent =
   | { type: 'duckPopped'; id: number; colour: Colour; x: number; y: number }
   | { type: 'blast'; colour: Colour; x: number; y: number; r: number }
   | { type: 'duckSpawned'; duck: Duck }
+  /**
+   * A duck touched this crate — the flinch, reported for its own sake.
+   *
+   * Separate from `barrelDamaged` on purpose: being touched and losing a stage
+   * are different questions, and the crate's little bounce answers the first
+   * one. It used to be hung off `barrelDamaged`, so a glancing touch or a
+   * second duck arriving inside the damage cooldown bounced off a crate that
+   * never moved. (x,y) is the duck's centre at contact and `speed` the
+   * PRE-bounce approach speed, so the view can scale the sound by impact.
+   */
+  | { type: 'barrelBumped'; id: number; x: number; y: number; speed: number }
   | { type: 'barrelDamaged'; id: number; hp: number }
   | { type: 'barrelDestroyed'; id: number; x: number; y: number }
   | { type: 'barrelSpawned'; barrel: Barrel }
   | { type: 'clamSpawned'; clam: Clam }
   /** the clam took the hit and is cracking open (view plays the open sequence) */
   | { type: 'clamOpened'; id: number; x: number; y: number }
-  /** the single pearl it spills, once the lid is genuinely off (CLAM_SPILL_TICKS) */
-  | { type: 'pearlReleased'; id: number; x: number; y: number }
+  /** the pearl that hit spills. `id` is the shell, `pearl` this pearl's own id —
+   *  two from one shell can be in the air at once, so the view keys off `pearl` */
+  | { type: 'pearlReleased'; id: number; pearl: number; x: number; y: number }
   /** the pearl reached the HUD counter — this, and only this, decrements it.
    *  The World does not know the level's goal; the Director counts and reports. */
-  | { type: 'pearlCollected'; id: number }
+  | { type: 'pearlCollected'; id: number; pearl: number }
   /** the shell has shut again and is ready to be activated a second time */
   | { type: 'clamClosed'; id: number }
   /** the pearl goal is met: every clam is now an inert (but visible) bumper */

@@ -78,6 +78,50 @@ describe('the move budget binds at the sim level', () => {
     expect(d.movesLeft).toBe(0);
   });
 
+  it('the idle demo\'s shot is free — it fires, chains and counts, but never bills', () => {
+    // The ad is timed, not counted (user-locked 2026-08-07): a viewer who looks
+    // away for four seconds must not come back to a board that has spent their
+    // shots for them.
+    const d = new Director(3, 0);
+    d.start();
+    const before = d.movesLeft;
+
+    d.demoLaunch = true;
+    fireAtAnything(d);
+    // the flag is not allowed to hold the budget even while the shot flies —
+    // that hold is what bars the slingshot, so a held demo shot would lock the
+    // player out of the board for as long as the duck was moving
+    expect(d.slingshot.blocked).toBe(false);
+    d.step(SIM.DT);
+
+    expect(d.drained.filter((e) => e.type === 'duckLaunched')).toHaveLength(1);
+    expect(d.movesLeft).toBe(before);
+    // and the HUD is never told a number it would have to take back
+    expect(d.drained.filter((e) => e.type === 'movesLeft' && e.left !== before)).toHaveLength(0);
+    // spent by the launch it was set for, so the player's next shot pays
+    expect(d.demoLaunch).toBe(false);
+  });
+
+  it('a free shot does not excuse the one after it', () => {
+    const d = new Director(3, 0);
+    d.start();
+    d.movesLeft = 2;
+
+    d.demoLaunch = true;
+    fireAtAnything(d);
+    // wait for the board to be READY, not merely for nothing to be `live`. The
+    // slingshot is barred until the whole turn has resolved — the demo shot may
+    // have popped a duck, and a field waiting on a respawn refuses a grab — so
+    // firing on `!live` would be firing into a bar and never spend the move.
+    for (let i = 0; i < 600 && !d.readyForInput; i++) d.step(SIM.DT);
+    expect(d.readyForInput).toBe(true);
+    expect(d.movesLeft).toBe(2);
+
+    fireAtAnything(d); // the player's own shot, on a flag that has been spent
+    d.step(SIM.DT);
+    expect(d.movesLeft).toBe(1);
+  });
+
   it('a blocked slingshot refuses the grab outright', () => {
     const d = new Director(3, 0);
     d.start();

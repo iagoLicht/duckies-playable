@@ -31,6 +31,12 @@ export interface BotStats {
   budget: number;
   /** why the run stopped — 'won' | 'failed' | 'timeout' | 'shotCap' */
   end: 'won' | 'failed' | 'timeout' | 'shotCap';
+  /** pearls still owed when the run ended — the near-miss read on a loss */
+  pearlsLeft: number;
+  /** crates still standing when the run ended */
+  barrelsLeft: number;
+  /** the sim's own verdict on a failed run — which limit took it */
+  failReason: 'moves' | 'time' | null;
 }
 
 export interface BotOpts {
@@ -59,6 +65,19 @@ export interface BotOpts {
   maxSeconds?: number;
   /** launches before the run is abandoned */
   maxShots?: number;
+  /**
+   * Skill dials, defaulting to the shipped "distracted thumb". The clock-rig
+   * calibration harness (tests/tools/calibrate-clock.mjs) turns them to model a
+   * FOCUSED player — less aim noise, quicker thinking — because "generally
+   * loses, but a good player can win" is a claim about two skill levels, and
+   * one bot can only measure one of them.
+   */
+  aimNoiseDeg?: number;
+  /** seconds of think time before each grab: thinkMin + rng()*thinkJitter */
+  thinkMin?: number;
+  thinkJitter?: number;
+  /** scale on the target-preference noise (1 = shipped thumb) */
+  preferNoise?: number;
 }
 
 const HUGE_BUDGET = 1e9;
@@ -68,6 +87,10 @@ export function playLevel(levelIndex: number, seed: number, opts: BotOpts = {}):
   const unlimitedTime = opts.unlimitedTime ?? false;
   const maxSeconds = opts.maxSeconds ?? 150;
   const maxShots = opts.maxShots ?? 120;
+  const aimNoiseDeg = opts.aimNoiseDeg ?? 10;
+  const thinkMin = opts.thinkMin ?? 1.6;
+  const thinkJitter = opts.thinkJitter ?? 0.9;
+  const preferNoise = opts.preferNoise ?? 1;
 
   const rng = mulberry32(seed * 7919 + 1);
   const dir = new Director(seed, levelIndex, unlimitedTime ? Infinity : SIM.LEVEL_TICKS);
@@ -80,6 +103,7 @@ export function playLevel(levelIndex: number, seed: number, opts: BotOpts = {}):
   let blasts = 0;
   let clamsOpened = 0;
   let finaleArmed = false;
+  let failReason: 'moves' | 'time' | null = null;
 
   while (!dir.won && !dir.failed && dir.world.time < maxSeconds && shots < maxShots) {
     if (unlimitedMoves) dir.movesLeft = HUGE_BUDGET;
@@ -89,9 +113,17 @@ export function playLevel(levelIndex: number, seed: number, opts: BotOpts = {}):
       else if (e.type === 'clamOpened') clamsOpened++;
       else if (e.type === 'duckLaunched') shots++;
       else if (e.type === 'finaleArmed') finaleArmed = true;
+      else if (e.type === 'levelFailed') failReason = e.reason;
     }
     if (dir.world.time < nextShotAt) continue;
-    nextShotAt = dir.world.time + 1.6 + rng() * 0.9;
+    // NO GREEN RING, NO GRAB — the same rule the player plays under: the board
+    // takes one shot at a time and refuses a grab until the turn has fully
+    // resolved. Tested BEFORE nextShotAt is re-armed, deliberately: re-arming
+    // first would charge a refused grab a whole extra think-time interval, so
+    // every busy board would cost this bot 1.6-2.5s of nothing rather than the
+    // few ticks it actually has to wait.
+    if (!dir.readyForInput) continue;
+    nextShotAt = dir.world.time + thinkMin + rng() * thinkJitter;
 
     // matched ducks wear no ring and refuse a grab — a player wouldn't tap one
     const resting = dir.world.ducks.filter((d) => !d.live && !d.popping && !d.matched);
@@ -117,17 +149,19 @@ export function playLevel(levelIndex: number, seed: number, opts: BotOpts = {}):
         return Math.abs(bx * dy - by * dx) < r + SIM.DUCK_R * 0.6;
       };
       return dir.world.barrels.some((b) => reaches(b.x, b.y, SIM.BARREL_R))
-        || dir.world.clams.some((c) => !c.open && reaches(c.x, c.y, SIM.CLAM_R));
+        // an OPEN shell is still worth aiming at: it pays out on every contact,
+        // so `active` (quota not yet met) is the only thing that makes it a goal
+        || dir.world.clams.some((c) => c.active && reaches(c.x, c.y, SIM.CLAM_R));
     };
     const scored = others.map((t) => ({
       t,
-      s: (caromsIntoGoal(t) ? 3 : 0) + (t.colour === duck.colour ? 2 : 0) + rng() * 1.5,
+      s: (caromsIntoGoal(t) ? 3 : 0) + (t.colour === duck.colour ? 2 : 0) + rng() * 1.5 * preferNoise,
     }));
     scored.sort((a, b) => b.s - a.s);
     const best = scored[0]!.t;
 
     let ang = Math.atan2(best.y - duck.y, best.x - duck.x);
-    ang += ((rng() - 0.5) * 20 * Math.PI) / 180; // +/-10 deg noise
+    ang += ((rng() - 0.5) * 2 * aimNoiseDeg * Math.PI) / 180;
     const pull = 140 + rng() * 60;
     if (dir.slingshot.begin(duck.x, duck.y)) {
       const aimAt = (a: number): void =>
@@ -157,6 +191,9 @@ export function playLevel(levelIndex: number, seed: number, opts: BotOpts = {}):
   return {
     levelIndex, seed, won: dir.won, shots, seconds: dir.world.time,
     blasts, clamsOpened, finaleArmed, goals, budget, end,
+    pearlsLeft: dir.pearlCounter.left,
+    barrelsLeft: dir.world.barrels.length,
+    failReason,
   };
 }
 

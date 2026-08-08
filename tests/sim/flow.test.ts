@@ -25,7 +25,8 @@ describe('the ad script', () => {
   it('beat one cleared: a win card whose button walks you onward', () => {
     expect(outcomeFor(BEAT_1, true)).toEqual({
       kind: 'card',
-      title: 'YOU WIN!',
+      title: 'CONGRATULATIONS!',
+      subtitle: 'You crushed it!',
       buttonLabel: 'NEXT LEVEL',
       buttonAction: 'advance',
       advanceTo: BEAT_2,
@@ -33,14 +34,26 @@ describe('the ad script', () => {
     });
   });
 
-  it('beat one failed: the board quietly restarts and NO card is shown', () => {
-    expect(outcomeFor(BEAT_1, false)).toEqual({ kind: 'restart' });
+  it('beat one failed: its own card — TRY AGAIN, and it goes to the store', () => {
+    // user-set 2026-08-07: losing the first board no longer restarts it. Same
+    // card, same art, same copy as beat two's; only the CTA wording differs,
+    // and the button is the store either way. Nothing here reloads a level.
+    expect(outcomeFor(BEAT_1, false)).toEqual({
+      kind: 'card',
+      title: 'SO CLOSE!',
+      subtitle: "You'll get them next time!",
+      buttonLabel: 'TRY AGAIN',
+      buttonAction: 'store',
+      advanceTo: null,
+      storeLink: false,
+    });
   });
 
   it('beat two failed: the lose card, and it is the end', () => {
     expect(outcomeFor(BEAT_2, false)).toEqual({
       kind: 'card',
-      title: 'YOU LOST',
+      title: 'SO CLOSE!',
+      subtitle: "You'll get them next time!",
       buttonLabel: 'PLAY NOW',
       buttonAction: 'store',
       advanceTo: null,
@@ -51,7 +64,8 @@ describe('the ad script', () => {
   it('beat two cleared: still the end, still the store', () => {
     expect(outcomeFor(BEAT_2, true)).toEqual({
       kind: 'card',
-      title: 'YOU WIN!',
+      title: 'CONGRATULATIONS!',
+      subtitle: 'You crushed it!',
       buttonLabel: 'PLAY NOW',
       buttonAction: 'store',
       advanceTo: null,
@@ -69,9 +83,32 @@ describe('the ad script', () => {
     }
   });
 
-  it('no card can ever appear on a mustWin beat that was lost', () => {
-    for (const b of AD_SCRIPT.filter((x) => x.mustWin)) {
-      expect(outcomeFor(b.level, false).kind).toBe('restart');
+  it('NO fail anywhere in the ad ever replays a board', () => {
+    // the one property that used to have an exception (beat one's quiet
+    // restart) and now has none: a viewer who loses is always handed the store
+    for (const b of AD_SCRIPT) {
+      const o = outcomeFor(b.level, false);
+      expect(o.kind).toBe('card');
+      if (o.kind !== 'card') throw new Error('unreachable');
+      expect(o.title).toBe('SO CLOSE!');
+      expect(o.buttonAction).toBe('store');
+      expect(o.advanceTo).toBeNull();
+    }
+  });
+
+  it('every card carries BOTH lines, and the right pair of them', () => {
+    // the card is built from one CardCopy value, so a winning banner can never
+    // end up over a losing line — this is the property that guarantees it
+    for (const level of AD_SCRIPT.map((b) => b.level)) {
+      for (const cleared of [true, false]) {
+        const o = outcomeFor(level, cleared);
+        if (o.kind !== 'card') throw new Error('unreachable');
+        expect(o.title, `level ${level} cleared=${cleared}`).toBeTruthy();
+        expect(o.subtitle, `level ${level} cleared=${cleared}`).toBeTruthy();
+        // caps shout the verdict, sentence case answers it — never the reverse
+        expect(o.title).toBe(o.title.toUpperCase());
+        expect(o.subtitle).not.toBe(o.subtitle.toUpperCase());
+      }
     }
   });
 

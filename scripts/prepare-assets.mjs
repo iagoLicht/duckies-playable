@@ -63,6 +63,9 @@ const WEBP = [
   { src: 'ui/hud-currency-plate.png', q: 75 },
   { src: 'ui/popup-body-tall.png', q: 75 },
   { src: 'ui/btn-green-large.png', q: 78 },                         // end-card CTA (578x227, no baked label)
+  // the pack's own X (43x49, already trimmed to its art) — the refused-aim
+  // marker. Replaces a hand-drawn two-stroke cross; see AIM_X_H in scene.ts
+  { src: 'ui/icon-x.png', q: 88 },
   { src: 'icons/ribbon-pink.png', q: 70 },
   { src: 'vfx/impact-star.png', q: 75 },
   { src: 'vfx/dome.png', q: 75 },
@@ -154,8 +157,12 @@ async function bakeOutline(srcPath, outPath, grow, q) {
 /** Fonts -> woff2 subset. Title Case per brand rules, so keep both cases + digits + punctuation. */
 const FONT_CHARS =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 !?.,:/×+-\'"%';
+// ONE FACE. CherryBombOne-Regular used to be staged here too, but nothing in the
+// ad ever set fontFamily to it — the HUD and the end card both went to the
+// condensed face — so it was ~21 KB of base64 in the single-file build for zero
+// glyphs. Dropped 2026-08-08. The .ttf is still in the pack if it is ever wanted
+// back; staging it again is this one line.
 const FONTS = [
-  { src: 'fonts/CherryBombOne-Regular.ttf', out: 'fonts/cherry-bomb.woff2' },
   { src: 'fonts/asap-semicondensed-black.ttf', out: 'fonts/asap-black.woff2' },
 ];
 

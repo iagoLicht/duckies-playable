@@ -98,6 +98,23 @@ export class Slingshot {
     return { x: bent.dx, y: bent.dy };
   }
 
+  /**
+   * Where the sling is POINTING, for the view to face the duck along. Live from
+   * the first pixel of the drag, unlike aimDir(), which withholds a direction
+   * below MIN_PULL because there is no shot to fire yet.
+   *
+   * That gap was visible: with nothing to follow, the rig held its setup pose
+   * through the start of every drag and then snapped to the aim the moment the
+   * pull crossed the threshold. Purely a view feed — end() still fires off
+   * aimDir(), so what counts as a shot is untouched.
+   */
+  facing(): { x: number; y: number } | null {
+    const p = this.pull;
+    if (!p || p.len <= 0) return null;
+    const bent = this.applyAssist(p.duck, p.dx / p.len, p.dy / p.len);
+    return { x: bent.dx, y: bent.dy };
+  }
+
   /** Projected shot for the aim UI. Null when not aiming (or under MIN_PULL). */
   preview(): AimPreview | null {
     const duck = this.duck;

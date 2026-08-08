@@ -35,13 +35,33 @@ export class Director {
   private destroyed = 0;
   /** pearls that have REACHED the HUD — spilled-but-still-flying ones don't count */
   private pearlsCollected = 0;
-  private respawnAt: number | null = null;
+  /**
+   * World times at which replacements fall due, one entry per duck popped,
+   * oldest first. A pop owes a duck back RESPAWN_DELAY later and the debt is
+   * carried per pop rather than per board — see handleRespawns.
+   */
+  private respawnDue: number[] = [];
   /** consecutive settled ticks — the dead-board check only runs after a pause */
   private deadBoardTicks = 0;
   /** shots already fired whose move has not been debited yet (same-frame guard) */
   private pendingLaunches = 0;
+  /**
+   * The NEXT launch is the idle demo's, and it plays by every rule except the
+   * budget: it is not debited, and it is not held against the budget while it
+   * flies either. Set immediately before `slingshot.end()` and cleared by the
+   * launch it describes, so it can never leak onto a player's shot.
+   *
+   * The ad is timed, not counted (user-locked 2026-08-07) — a viewer who looks
+   * away must not come back to a board that has spent their shots for them. It
+   * is a flag here rather than a correction applied afterwards because the
+   * counter is on screen: told before the launch, the HUD never sees the number
+   * move; told after, it flickers down and back.
+   */
+  demoLaunch = false;
   /** fixed steps left on the board's countdown — see SIM.LEVEL_TICKS */
   private ticksLeft: number;
+  /** the countdown the board opened with, for the pace governor's progress */
+  private readonly ticksTotal: number;
   /** the last whole second published, so `timeLeft` only fires on a change */
   private lastSeconds = -1;
 
@@ -57,6 +77,7 @@ export class Director {
   constructor(seed: number, levelIndex = 0, ticks: number = SIM.LEVEL_TICKS) {
     this.levelIndex = levelIndex;
     this.ticksLeft = ticks;
+    this.ticksTotal = ticks;
     const def = LEVELS[levelIndex];
     if (!def) throw new Error(`no level at index ${levelIndex}`);
     this.level = def;
@@ -70,19 +91,35 @@ export class Director {
     // fire for free — so a shot in flight is counted against the budget the
     // instant it leaves, which is what bars the slingshot.
     this.slingshot.onLaunch = (): void => {
+      if (this.demoLaunch) return; // free: never charged, never even held
       this.pendingLaunches++;
       this.syncBlocked();
     };
   }
 
-  /** the slingshot bars on either limit — budget spent (once everything fired is
-   *  paid for) or clock expired — and on a level already decided */
+  /**
+   * When the slingshot is barred: either limit reached — budget spent (once
+   * everything fired is paid for) or clock expired — a level already decided, or
+   * A TURN STILL RESOLVING.
+   *
+   * That last clause is the one that makes "one shot at a time" a rule rather
+   * than an expectation (user-locked 2026-08-07). Nothing used to stop a player
+   * grabbing a second duck while the first was still in flight: `begin` refused
+   * a duck that was itself live, matched or popping, and said nothing about the
+   * rest of the board — so a shot could be fired into a chain that had not
+   * finished, spending a move on a board that was about to rearrange itself.
+   *
+   * It belongs HERE, not in the pointer handler, for the reason the move budget
+   * does: a limit enforced only in the view is not enforced. A bot, a test, or
+   * anything else driving the sim directly gets the same rule.
+   */
   private syncBlocked(): void {
     this.slingshot.blocked =
       this.movesLeft - this.pendingLaunches <= 0 ||
       this.ticksLeft <= 0 ||
       this.won ||
-      this.failed;
+      this.failed ||
+      !this.boardComplete;
   }
 
   /** crates destroyed — the barrel-icon counter */
@@ -109,7 +146,6 @@ export class Director {
   }
 
   start(): void {
-    this.syncBlocked();
     for (const d of this.level.ducks) this.world.spawnDuck(d.colour, d.x, d.y);
     for (const b of this.level.barrels) {
       this.world.spawnBarrel('wood', b.x, b.y, b.hp, b.golden ?? false);
@@ -123,6 +159,10 @@ export class Director {
     // field arrives on one frame. It has to run after the barrels and clams
     // above, because freeSpot() places around them.
     this.fillField();
+    // AFTER the board is populated, not before: the bar now asks whether the
+    // board is complete, and an empty field is not. Asked first, it would open
+    // every level barred until the first step() cleared it.
+    this.syncBlocked();
     // one consistent stream: the setup spawns land in `drained` alongside the
     // level header instead of leaking into the first step()
     this.drained.push(...this.world.events.splice(0, this.world.events.length));
@@ -142,14 +182,27 @@ export class Director {
     this.drained.push(...evs); // causes first, then the reactions below
     for (const e of evs) {
       if (e.type === 'duckLaunched') {
-        // only a real launch costs a move; a refused aim never reaches here
-        this.movesLeft = Math.max(0, this.movesLeft - 1);
-        this.pendingLaunches = Math.max(0, this.pendingLaunches - 1);
-        this.pushLocal({ type: 'movesLeft', left: this.movesLeft });
+        // the idle demo's shot is the viewer's to watch, not to pay for: it
+        // still launches, still chains, still counts for the goals — it just
+        // does not spend. The flag is spent HERE, by the launch it was set for.
+        if (this.demoLaunch) {
+          this.demoLaunch = false;
+        } else {
+          // only a real launch costs a move; a refused aim never reaches here
+          this.movesLeft = Math.max(0, this.movesLeft - 1);
+          this.pendingLaunches = Math.max(0, this.pendingLaunches - 1);
+          this.pushLocal({ type: 'movesLeft', left: this.movesLeft });
+        }
       }
       if (e.type === 'barrelDestroyed') {
         this.destroyed++;
         this.pushCounter();
+      }
+      // the debt is booked by the POP that created it, and comes due on its own
+      // clock — nothing about the rest of the board delays it (though the pace
+      // hold may stretch the clock itself on a hot rigged run: respawnDueAt)
+      if (e.type === 'duckPopped') {
+        this.respawnDue.push(this.respawnDueAt());
       }
       // a pearl counts when it LANDS on the counter, not when the shell spills
       // it — so the number the player sees drop is the pearl they just watched
@@ -200,30 +253,95 @@ export class Director {
       }
     }
 
-    // finale flourish: the last goal standing gets near-max assist
+    // pace-governed assist: the board leans into a lagging run and off a hot
+    // one. On a paced board it keeps the dial through the finale too — the
+    // flourish's near-max crank is a "help them win" device, and this board's
+    // whole brief is to be lost by a hair (a lagging run still gets the lean).
+    if (this.level.pace && this.level.pace.assistGain > 0) {
+      const a = this.level.assist - this.pacePressure() * this.level.pace.assistGain;
+      this.slingshot.assist = Math.max(0.25, Math.min(0.7, a));
+    }
+
+    // finale flourish: the last goal standing gets near-max assist — except on
+    // a paced board, where the governor above owns the dial and the finale
+    // stays what it is to the VIEW: an event, the last-goal drama beat
     if (!this.finaleArmed && !this.won && this.goalsRemaining === 1) {
       this.finaleArmed = true;
-      this.slingshot.assist = Math.max(this.level.assist, 0.9);
+      if (!this.level.pace) this.slingshot.assist = Math.max(this.level.assist, 0.9);
       this.pushLocal({ type: 'finaleArmed' });
     }
 
-    this.syncBlocked(); // the budget bars the slingshot itself, not just the view
-
     this.handleRespawns();
+    // LAST, after the respawn: the bar reads the board, so it has to read the
+    // board this tick ends with. Run before handleRespawns it would still see
+    // the shortfall the respawn just filled, and bar the slingshot for one more
+    // tick than the rule asks for.
+    this.syncBlocked();
   }
 
   /**
-   * Nothing moving, no fuse burning, no pending pop — and no clam mid-cycle.
+   * Nothing moving, no fuse burning, no pending pop — and no pearl still in the
+   * air over an open shell.
    *
-   * An open clam is unfinished business exactly like a burning fuse: it has a
-   * pearl in the air that has not been counted yet. Without this an unlucky
-   * last shot could crack a clam, let the board come to rest, and be declared
-   * FAILED a full second before the pearl it already earned lands on the
-   * counter and would have cleared the level.
+   * A pearl in flight is unfinished business exactly like a burning fuse: it has
+   * not been counted yet. Without this an unlucky last shot could crack a clam,
+   * let the board come to rest, and be declared FAILED a full second before the
+   * pearl it already earned lands on the counter and would have cleared the
+   * level. The pearls are asked about directly rather than through the shell's
+   * pose, because the two are no longer the same question — every hit spills,
+   * so a shell can shut over a pearl that is still climbing.
    */
   boardSettled(): boolean {
+    if (this.world.pearls.length > 0) return false;
     if (this.world.clams.some((c) => c.open)) return false;
     return !this.world.ducks.some((d) => d.live || d.matched || d.vx !== 0 || d.vy !== 0);
+  }
+
+  /** how many ducks the board is owed. A legal shot needs a second duck to aim
+   *  at, so the floor is two however few the level asks for. */
+  private get fieldTarget(): number {
+    return Math.max(this.level.targetDucks, 2);
+  }
+
+  /**
+   * Is the board genuinely waiting on the player? This is the question the view
+   * asks before it offers anything grabbable.
+   *
+   * `boardSettled` alone is NOT that question, and reading it as if it were is
+   * the bug this exists to close. Settling only asks whether everything has come
+   * to REST — but `popDuck` takes its victims out of `world.ducks` on the frame
+   * it fires, so the instant a chain finishes the board is perfectly still and
+   * two ducks short, with the replacements still sitting on RESPAWN_DELAY. That
+   * leaves a ~0.6s window where the turn is visibly unfinished and every settled
+   * test says otherwise.
+   *
+   * Three independent things have to hold:
+   *   settled — nothing moving, no fuse burning, no pending pop, no pearl in the
+   *             air and no clam still open over one
+   *   whole   — every duck the level is owed is back on the water
+   *   open    — the player may actually take a shot: budget left, clock left,
+   *             outcome not already decided
+   *
+   * It reads the slingshot's own bar rather than re-deriving any of that,
+   * because syncBlocked now folds all three in. THE OFFER AND THE GRAB ARE
+   * LITERALLY THE SAME TEST: whatever the rings promise, `begin` honours, and
+   * neither can drift from the other by being edited alone.
+   */
+  get readyForInput(): boolean {
+    return !this.slingshot.blocked;
+  }
+
+  /**
+   * Settled AND whole — the board has finished being a board.
+   *
+   * Split out of readyForInput because the END OF THE LEVEL asks the same
+   * question with the last clause inverted: the banner may only go up once the
+   * turn has completely resolved, and by then the slingshot is barred by
+   * definition (won/failed both bar it). Anything asking "has the board finished
+   * moving" wants this; only "may the player shoot" wants readyForInput.
+   */
+  get boardComplete(): boolean {
+    return this.boardSettled() && this.world.ducks.length >= this.fieldTarget;
   }
 
   /**
@@ -251,14 +369,24 @@ export class Director {
   }
 
   private handleRespawns(): void {
-    if (this.won || this.failed) return;
-    let target = this.level.targetDucks;
+    // A DECIDED BOARD STILL FILLS BACK UP (user-locked 2026-08-07). This used to
+    // return here the moment won/failed latched, which left the ducks a
+    // last-shot chain had eaten simply gone. That was invisible while the card
+    // arrived on a fixed delay, and became visible the moment the card started
+    // waiting for the board to be whole: the level would end a duck short, the
+    // count would never recover, and the banner would have waited for ever.
+    //
+    // The dead-board sweep below is the one thing a decided board does NOT do —
+    // it exists to keep a shot available, and nobody is going to shoot.
+    const decided = this.won || this.failed;
     // a shot is only valid aimed at another duck, so one duck alone is a
-    // softlock — the field must never settle below two
-    if (this.world.ducks.length < 2) target = Math.max(target, 2);
+    // softlock — the field must never settle below two, which is baked into
+    // fieldTarget. One definition of "owed", shared with readyForInput, so the
+    // rings cannot come back on a count the respawn is still working towards.
+    const target = this.fieldTarget;
     // …and a stocked board can be just as dead if nothing has a line. Only
     // worth asking once everything has come to rest, and cheap at that rate.
-    if (this.world.ducks.length >= target && this.boardSettled() && !this.slingshot.aiming) {
+    if (!decided && this.world.ducks.length >= target && this.boardSettled() && !this.slingshot.aiming) {
       this.deadBoardTicks++;
       // the sweep is ~20ms on a dead board, so ask once per grace window rather
       // than every tick — otherwise a stuck board pays it twice a second
@@ -273,28 +401,38 @@ export class Director {
       this.deadBoardTicks = 0;
     }
     if (this.world.ducks.length >= target) {
-      this.respawnAt = null;
+      this.respawnDue.length = 0; // whole board, nothing owed
       return;
     }
-    // A top-up belongs to the gap BETWEEN turns, so it waits for the turn to
-    // finish: nothing in flight, no fuse blinking, no clam still owing a pearl.
-    // The timer used to run from the moment the count dropped, which is the
-    // moment of the FIRST pop — so a chain that took two seconds to unwind had
-    // ducks materialising in the middle of it, a second and a half before the
-    // player's shot was over. Clearing it while unsettled also means the beat is
-    // measured from the board coming to rest, not from the pop, so the pause
-    // reads the same whether the shot popped one duck or seven.
-    if (!this.boardSettled()) {
-      this.respawnAt = null;
+    // A REPLACEMENT IS OWED BY ITS POP, NOT BY THE TURN (user-locked
+    // 2026-08-08). This used to wait for boardSettled() — nothing in flight, no
+    // fuse blinking, no clam still owing a pearl — so a chain that took two
+    // seconds to unwind left the board visibly short for all of it, and only
+    // then started the RESPAWN_DELAY beat. Each pop now books its own debt and
+    // that debt comes due on its own clock, so ducks arrive while a chain is
+    // still going off around them. That IS the intent: the board is never
+    // visibly short, at the price of ducks landing next to live explosions —
+    // and one that lands inside a blast is simply doomed with the rest.
+    //
+    // Owed but nothing booked: the field is short for a reason no pop accounted
+    // for (an authored board opening short, a duck removed some other way).
+    // Book the WHOLE shortfall, one debt per missing duck, so the fallback still
+    // lands as a single batch — booking one and re-arming next tick is exactly
+    // the duck-per-delay dribble that was taken out on 2026-08-07. This is the
+    // guarantee the old settle-gated path gave for free.
+    if (this.respawnDue.length === 0) {
+      const owed = target - this.world.ducks.length;
+      for (let i = 0; i < owed; i++) this.respawnDue.push(this.respawnDueAt());
       return;
     }
-    if (this.respawnAt === null) {
-      this.respawnAt = this.world.time + SIM.RESPAWN_DELAY;
-      return;
+    let due = 0;
+    while (this.respawnDue.length > 0 && this.respawnDue[0]! <= this.world.time) {
+      this.respawnDue.shift();
+      due++;
     }
-    if (this.world.time < this.respawnAt) return;
-    this.respawnAt = null;
-    this.fillField(target);
+    if (due === 0) return;
+    // never overshoot the level's count, however many debts came due at once
+    this.fillField(Math.min(target, this.world.ducks.length + due));
   }
 
   /**
@@ -306,20 +444,91 @@ export class Director {
    * freeSpot() reads world.ducks, so each pick already sees the ones placed a
    * moment earlier in this same loop and the batch cannot stack on itself.
    * Bounded by construction: every pass adds a duck, so the count reaches the
-   * target. `target` defaults to the level's, floored at the two ducks a legal
-   * shot needs.
+   * target. `target` defaults to fieldTarget — the level's count, floored at the
+   * two ducks a legal shot needs.
    */
-  private fillField(target = Math.max(this.level.targetDucks, 2)): void {
-    const colours: Colour[] = ['yellow', 'green', 'purple', 'red'];
+  private fillField(target = this.fieldTarget): void {
     while (this.world.ducks.length < target) {
-      const colour = colours[Math.floor(this.world.rng() * colours.length)]!;
+      const colour = this.pickRespawnColour();
       const spot = this.freeSpot();
       this.world.spawnDuck(colour, spot.x, spot.y);
     }
   }
 
+  /**
+   * Clock-rig pace pressure, −1 (far behind the near-miss line) … +1 (far
+   * ahead of it). Zero whenever the level carries no `pace` block or the clock
+   * is infinite — and zero means every caller takes exactly the legacy random
+   * path, RNG call for RNG call, which is what keeps un-rigged levels (and the
+   * untimed solvability gate and tuner) byte-identical to before.
+   */
+  private pacePressure(): number {
+    const pace = this.level.pace;
+    if (!pace || !Number.isFinite(this.ticksTotal)) return 0;
+    const q = this.pearlCounter;
+    const collected = q.total - q.left;
+    const progress = Math.min(1, (this.ticksTotal - this.ticksLeft) / this.ticksTotal);
+    const ideal = (q.total - pace.targetLeft) * progress;
+    return Math.max(-1, Math.min(1, (collected - ideal) / pace.spread));
+  }
+
+  /**
+   * The colour a respawn arrives in. Uniform, except under pace steering:
+   * behind the near-miss line the board sometimes deals the colour with the
+   * most resting mates (matches — and the blasts that crack clams — come
+   * easier), ahead of it the colour with the fewest. Odds scale with the
+   * pressure, so a run tracking the line is dealt a fair hand. Supply only:
+   * nothing already on the water, earned or aimed at, is touched.
+   */
+  private pickRespawnColour(): Colour {
+    const colours: Colour[] = ['yellow', 'green', 'purple', 'red'];
+    const pressure = this.pacePressure();
+    if (pressure !== 0 && this.world.rng() < Math.abs(pressure) * this.level.pace!.colourGain) {
+      const counts = new Map<Colour, number>();
+      for (const c of colours) counts.set(c, 0);
+      for (const d of this.world.ducks) {
+        if (!d.live && !d.popping && !d.matched) counts.set(d.colour, counts.get(d.colour)! + 1);
+      }
+      let pick = colours[0]!;
+      for (const c of colours) {
+        const better = pressure < 0
+          ? counts.get(c)! > counts.get(pick)!
+          : counts.get(c)! < counts.get(pick)!;
+        if (better) pick = c;
+      }
+      return pick;
+    }
+    return colours[Math.floor(this.world.rng() * colours.length)]!;
+  }
+
+  /**
+   * When a replacement booked NOW falls due. RESPAWN_DELAY as shipped — plus
+   * the pace hold on a hot rigged run, which stretches the debt's clock (never
+   * shortens it) so the next chain starts on a briefly thinner board. The
+   * batch still lands whole, on one beat, exactly as authored.
+   */
+  private respawnDueAt(): number {
+    // never on a decided board: the banner waits for the board to be whole
+    // (user-locked "a decided board still fills back up"), and pace has no
+    // meaning once the outcome is in
+    const hold = this.won || this.failed
+      ? 0
+      : Math.max(0, this.pacePressure()) * (this.level.pace?.holdGain ?? 0);
+    return this.world.time + SIM.RESPAWN_DELAY + hold;
+  }
+
   private freeSpot(): { x: number; y: number } {
     const R = this.level.spawnRegion;
+    // Pace steering shrinks the sampled window: behind the near-miss line the
+    // board deals arrivals nearer its bottom edge — the clam end, on the
+    // rigged board — ahead of it, nearer the top. At zero pressure the window
+    // is the whole authored region, exactly as before.
+    const pressure = this.pacePressure();
+    const gain = this.level.pace?.placeGain ?? 0;
+    let y0 = R.y0;
+    let y1 = R.y1;
+    if (pressure < 0) y0 = R.y0 - pressure * gain * (R.y1 - R.y0);
+    else if (pressure > 0) y1 = R.y1 - pressure * gain * (R.y1 - R.y0);
     // how much room a candidate has: negative means it overlaps something
     const clearance = (x: number, y: number): number => {
       let worst = Infinity;
@@ -328,11 +537,11 @@ export class Director {
       for (const c of this.world.clams) worst = Math.min(worst, Math.hypot(c.x - x, c.y - y) - (SIM.DUCK_R + SIM.CLAM_R + 8));
       return worst;
     };
-    let best = { x: (R.x0 + R.x1) / 2, y: (R.y0 + R.y1) / 2 };
+    let best = { x: (R.x0 + R.x1) / 2, y: (y0 + y1) / 2 };
     let bestClear = -Infinity;
     for (let tries = 0; tries < 40; tries++) {
       const x = R.x0 + this.world.rng() * (R.x1 - R.x0);
-      const y = R.y0 + this.world.rng() * (R.y1 - R.y0);
+      const y = y0 + this.world.rng() * (y1 - y0);
       const c = clearance(x, y);
       if (c > 0) return { x, y };
       if (c > bestClear) {

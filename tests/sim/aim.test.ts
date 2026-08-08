@@ -36,6 +36,37 @@ describe('Slingshot', () => {
     expect(d.live).toBe(false);
   });
 
+  it('facing() is live below MIN_PULL, where there is still no shot', () => {
+    const w = new World(1);
+    w.spawnDuck('red', 300, 700);
+    const s = new Slingshot(w);
+    s.assist = 0;
+    s.begin(300, 700);
+
+    expect(s.facing()).toBeNull(); // nothing dragged yet, no direction to give
+    s.move(290, 700); // pull 10, well under MIN_PULL 40
+    expect(s.preview()).toBeNull(); // no shot to project…
+    const f = s.facing();           // …but the view still gets something to aim along
+    expect(f!.x).toBeCloseTo(1, 6);
+    expect(f!.y).toBeCloseTo(0, 6);
+    expect(s.end()).toBe(false);    // and it is still a whiff
+  });
+
+  it('facing() is the same direction the shot is projected along', () => {
+    const w = new World(1);
+    w.spawnDuck('red', 300, 700);
+    w.spawnDuck('yellow', 520, 610); // in the cone, so assist actually bends
+    const s = new Slingshot(w);
+    s.assist = 0.6;
+    s.begin(300, 700);
+    s.move(300 - 120, 700 + 40);
+
+    const f = s.facing()!;
+    const pv = s.preview()!;
+    expect(f.x).toBeCloseTo(pv.dir.x, 12);
+    expect(f.y).toBeCloseTo(pv.dir.y, 12);
+  });
+
   it('off-centre tap with no drag is a whiff (pull anchors at the pointer)', () => {
     const w = new World(1);
     const d = w.spawnDuck('red', 300, 700);

@@ -167,13 +167,160 @@ describe('World motion', () => {
     expect(w.events.filter((e) => e.type === 'barrelDestroyed')).toHaveLength(1);
   });
 
-  it('a slow drifting duck does NOT damage a barrel', () => {
+  /**
+   * EVERY CONTACT COSTS A STAGE (user-locked 2026-08-07). There is no speed bar
+   * on the damage any more — a touch is a touch. The cases below are the three
+   * the old bar used to swallow.
+   */
+  it('a slow drifting duck damages a barrel — a touch is a touch', () => {
     const w = mk();
     const barrel = w.spawnBarrel('wood', 420, 700, 2);
     const d = w.spawnDuck('red', 320, 700);
-    d.vx = 60; // below BARREL_HIT_SPEED, not launched
+    d.vx = 60; // a soft drift, never launched — under the old 90px/s bar
     for (let i = 0; i < 120; i++) w.step(SIM.DT);
+    expect(barrel.hp).toBe(1);
+  });
+
+  it('EVERY contact costs a stage, across the whole head-on..grazing sweep', () => {
+    // The old bar tested `vn`, the NORMAL component — so a duck arriving fast
+    // but shallow carried most of its speed tangentially, cleared no bar, and
+    // bounced off a crate it did not scratch. Sweep the approach line from dead
+    // centre out to a graze and assert the invariant directly: if the crate
+    // reported the touch, the crate lost a stage.
+    const minD = SIM.DUCK_R + SIM.BARREL_R;
+    const silent: string[] = [];
+    let contacts = 0;
+    for (let i = 0; i <= 20; i++) {
+      const offset = (i / 20) * minD * 0.995;
+      for (const speed of [60, 200, 700, 1400]) {
+        const w = mk();
+        const barrel = w.spawnBarrel('wood', 500, 700, 3);
+        const d = w.spawnDuck('red', 300, 700 - offset);
+        d.vx = speed;
+        d.live = true;
+        for (let s = 0; s < 60; s++) w.step(SIM.DT);
+        const touched = w.events.some((e) => e.type === 'barrelBumped');
+        if (!touched) continue;
+        contacts++;
+        if (barrel.hp === 3) silent.push(`offset ${Math.round(offset)} @ ${speed}px/s`);
+      }
+    }
+    expect(contacts).toBeGreaterThan(20); // the sweep has to actually connect
+    expect(silent).toEqual([]);
+  });
+
+  it('a resting duck already touching a barrel never nibbles it', () => {
+    // the floor is STOP_SPEED, not a damage bar: the step snaps anything slower
+    // than that to exactly zero, so a duck at rest against a crate has vn == 0
+    // and is not approaching at all
+    const w = mk();
+    const barrel = w.spawnBarrel('wood', 420, 700, 3);
+    const d = w.spawnDuck('red', 420 - (SIM.DUCK_R + SIM.BARREL_R) + 2, 700);
+    d.vx = 0;
+    d.vy = 0;
+    for (let i = 0; i < 240; i++) w.step(SIM.DT);
+    expect(barrel.hp).toBe(3);
+  });
+});
+
+/**
+ * A CRATE THAT IS TOUCHED ALWAYS FLINCHES.
+ *
+ * The crate's little bounce used to be driven by `barrelDamaged`, so it only
+ * played when the contact ALSO chipped a stage — which at the time needed `vn`
+ * past a 90px/s bar and the crate's damage cooldown clear. Measured across the
+ * campaign (shots/probe-barrel-contacts.mjs): 705 contacts, 635 reactions. One
+ * touch in ten bounced the duck off a crate that did not move a muscle — a slam
+ * at 1880 px/s among them, silent only because another duck had hit the same
+ * crate a tenth of a second earlier.
+ *
+ * Both gates are gone now (see collideDuckBarrels): every contact costs a
+ * stage, so on an ordinary hit the two events fire together. They stay separate
+ * questions all the same — `barrelBumped` answers "was it touched",
+ * `barrelDamaged` "what is it wearing now" — and only the second one is
+ * meaningful for a blast, which damages a crate without touching it.
+ */
+describe('barrelBumped', () => {
+  it('a soft drift reports the contact, and now costs a stage with it', () => {
+    const w = mk();
+    const barrel = w.spawnBarrel('wood', 420, 700, 2);
+    const d = w.spawnDuck('red', 320, 700);
+    d.vx = 60; // a soft drift, never launched
+    for (let i = 0; i < 120; i++) w.step(SIM.DT);
+    expect(barrel.hp).toBe(1);
+    expect(w.events.filter((e) => e.type === 'barrelBumped').length).toBeGreaterThan(0);
+    expect(w.events.filter((e) => e.type === 'barrelDamaged')).toHaveLength(1);
+  });
+
+  it('a hard hit reports the contact AND the stage, exactly one of each', () => {
+    const w = mk();
+    const barrel = w.spawnBarrel('wood', 500, 700, 3);
+    const d = w.spawnDuck('red', 300, 700);
+    w.launch(d.id, 1000, 0);
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
     expect(barrel.hp).toBe(2);
+    expect(w.events.filter((e) => e.type === 'barrelBumped')).toHaveLength(1);
+    expect(w.events.filter((e) => e.type === 'barrelDamaged')).toHaveLength(1);
+    // the flinch is reported before the stage it caused
+    const bump = w.events.findIndex((e) => e.type === 'barrelBumped');
+    const dmg = w.events.findIndex((e) => e.type === 'barrelDamaged');
+    expect(bump).toBeLessThan(dmg);
+  });
+
+  it('a second duck arriving at once gets its own flinch AND its own stage', () => {
+    // The loudest case in the measurement: 25 of the 70 silent contacts were
+    // fast enough to damage and were refused only by the cooldown a moment
+    // earlier. The debounce is per DUCK now — it exists to stop one physical
+    // collision counting twice across substeps, never to swallow a second
+    // duck's separate hit.
+    const w = mk();
+    const barrel = w.spawnBarrel('wood', 360, 700, 3);
+    const gap = SIM.DUCK_R + SIM.BARREL_R + 8; // one step short of touching
+    const left = w.spawnDuck('red', 360 - gap, 700);
+    const right = w.spawnDuck('green', 360 + gap, 700);
+    left.vx = 600; // both arriving on the same step
+    right.vx = -600;
+    // 4 steps: long enough for both contacts, short enough that the half-energy
+    // rebound cannot reach a wall and come back for a second, real collision.
+    for (let i = 0; i < 4; i++) w.step(SIM.DT);
+    expect(w.events.filter((e) => e.type === 'barrelBumped')).toHaveLength(2);
+    expect(w.events.filter((e) => e.type === 'barrelDamaged')).toHaveLength(2);
+    expect(barrel.hp).toBe(1); // two ducks, two stages
+  });
+
+  it('carries the contact point and the PRE-bounce approach speed', () => {
+    const w = mk();
+    w.spawnBarrel('wood', 500, 700, 3);
+    const d = w.spawnDuck('red', 300, 700);
+    w.launch(d.id, 1000, 0);
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
+    const e = w.events.find((k) => k.type === 'barrelBumped');
+    expect(e).toBeDefined();
+    // contact point is the duck's centre, snapped to exactly touching
+    expect(Math.hypot(e!.x - 500, e!.y - 700)).toBeCloseTo(SIM.DUCK_R + SIM.BARREL_R, 3);
+    // approach, not the RESTITUTION_STATIC exit (which is half of it)
+    expect(e!.speed).toBeGreaterThan(900);
+    expect(e!.speed).toBeLessThanOrEqual(1000);
+  });
+
+  it('one physical collision is ONE flinch, not one per substep', () => {
+    // The no-cooldown claim, same as duckBumped's. The resolver snaps the duck
+    // out to exactly touching and reflects it, so the next substep finds them
+    // apart and cannot re-fire. Without that this would be ~960 events/second
+    // for as long as a duck rested against a crate.
+    const w = mk();
+    w.spawnBarrel('wood', 420, 700, 9);
+    const d = w.spawnDuck('red', 420 - (SIM.DUCK_R + SIM.BARREL_R) + 2, 700); // already overlapping
+    for (let i = 0; i < 120; i++) w.step(SIM.DT);
+    expect(w.events.filter((e) => e.type === 'barrelBumped').length).toBeLessThanOrEqual(1);
+  });
+
+  it('a blast that chips a crate reports no contact — nothing touched it', () => {
+    const w = mk();
+    const barrel = w.spawnBarrel('wood', 360, 815, 3); // 115 < BLAST_R
+    w.popDuck(w.spawnDuck('yellow', 360, 700));
+    expect(barrel.hp).toBe(2);
+    expect(w.events.filter((e) => e.type === 'barrelBumped')).toHaveLength(0);
   });
 });
 

@@ -373,6 +373,160 @@ for (let index = 0; index < LEVELS.length; index++) {
       expect(d.world.ducks.every((k) => !k.live)).toBe(true);
     });
 
+    // readyForInput is what the view hangs the green grab rings on, so each of
+    // these is a rule about what the player is allowed to be OFFERED, not just
+    // about bookkeeping. Every one of them passes boardSettled at some point in
+    // the window it covers — that is the whole reason the getter exists.
+    describe('readyForInput', () => {
+      it('a freshly opened board is ready', () => {
+        const d = started(index);
+        expect(d.readyForInput).toBe(true);
+      });
+
+      it('is false while a duck drifts, even one that was never launched', () => {
+        const d = started(index);
+        d.movesLeft = 99; // isolate this from the fail check
+        // 60 px/s: over STOP_SPEED so it genuinely moves, under every damage
+        // threshold so the board cannot clear itself out from under the test
+        const k = d.world.ducks[0]!;
+        k.vx = 60;
+        d.step(SIM.DT);
+        // the trap the old ring gate fell into: a duck shoved by a collision
+        // glides with `live` still false, so a live-only test called this ready
+        expect(k.live).toBe(false);
+        expect(d.readyForInput).toBe(false);
+
+        run(d, 5);
+        expect(d.readyForInput).toBe(true);
+      });
+
+      it('is false while a fuse burns — including for its bystanders', () => {
+        const d = started(index);
+        d.movesLeft = 99;
+        const k = d.world.ducks[0]!;
+        k.matched = true;
+        k.matchFuse = SIM.MATCH_FUSE_TICKS;
+        d.step(SIM.DT);
+        // nothing is moving at all here. The board is still mid-turn, and the
+        // OTHER ducks are what a per-duck test would have wrongly offered
+        expect(d.world.ducks.every((x) => x.vx === 0 && x.vy === 0)).toBe(true);
+        expect(d.readyForInput).toBe(false);
+      });
+
+      it('is false while the field is short, however still the water is', () => {
+        const d = started(index);
+        d.movesLeft = 99;
+        // exactly the state a pop leaves: popDuck takes its victim out of
+        // world.ducks on the frame it fires, so the board goes dead quiet a
+        // duck short while the replacement sits on RESPAWN_DELAY
+        d.world.ducks.pop();
+        // one step to publish the bar — it is recomputed per tick, not on every
+        // read, and nothing in the game mutates world.ducks behind step()'s back
+        d.step(SIM.DT);
+        expect(d.boardSettled()).toBe(true); // settled…
+        expect(d.readyForInput).toBe(false); // …but not ready
+
+        run(d, SIM.RESPAWN_DELAY + 0.5);
+        expect(d.world.ducks).toHaveLength(Math.max(level.targetDucks, 2));
+        expect(d.readyForInput).toBe(true);
+      });
+
+      it('is false when the player has no shot left to take', () => {
+        const d = started(index);
+        d.movesLeft = 0;
+        d.step(SIM.DT);
+        // a still, whole board — but the slingshot is barred, so offering a
+        // grab ring would be offering something the pointer already refuses
+        expect(d.boardSettled()).toBe(true);
+        expect(d.slingshot.blocked).toBe(true);
+        expect(d.readyForInput).toBe(false);
+      });
+
+      // boardComplete is the same question with the "may the player shoot"
+      // clause removed — it is what the end-of-level banner waits on, and by
+      // then the slingshot is barred by definition.
+      it('boardComplete ignores the bar that readyForInput answers to', () => {
+        const d = started(index);
+        d.movesLeft = 0;
+        d.step(SIM.DT);
+        expect(d.slingshot.blocked).toBe(true);
+        expect(d.readyForInput).toBe(false); // no shot allowed…
+        expect(d.boardComplete).toBe(true); // …but the board has finished
+      });
+
+      it('a WON board still fills back up, so the banner is not left waiting', () => {
+        const d = started(index);
+        razeAllGoals(d);
+        run(d, 1);
+        expect(d.won).toBe(true);
+        // the chain that won it ate a duck. The result is latched, but the field
+        // must still recover — a decided board that stopped topping up would
+        // hold the card for ever behind "wait until the board is whole"
+        d.world.ducks.pop();
+        expect(d.boardComplete).toBe(false);
+
+        run(d, SIM.RESPAWN_DELAY + 0.5);
+        expect(d.world.ducks).toHaveLength(Math.max(level.targetDucks, 2));
+        expect(d.boardComplete).toBe(true);
+      });
+
+      it('a FAILED board still fills back up', () => {
+        const d = started(index);
+        d.movesLeft = 0;
+        run(d, 1);
+        expect(d.failed).toBe(true);
+        d.world.ducks.pop();
+        expect(d.boardComplete).toBe(false);
+
+        run(d, SIM.RESPAWN_DELAY + 0.5);
+        expect(d.world.ducks).toHaveLength(Math.max(level.targetDucks, 2));
+        expect(d.boardComplete).toBe(true);
+      });
+
+      // ONE SHOT AT A TIME. The rings and the grab are meant to be the same
+      // test, so this drives a real shot and checks them against each other on
+      // every single tick of the resolution rather than at a few chosen moments.
+      it('a grab is possible on exactly the ticks the board is ready', () => {
+        const d = started(index);
+        d.movesLeft = 99;
+        // fire at the nearest neighbour, so the shot lands and starts a real
+        // resolution rather than sailing into a wall
+        const a = d.world.ducks[0]!;
+        let b = d.world.ducks[1]!;
+        for (const k of d.world.ducks.slice(1)) {
+          if (Math.hypot(k.x - a.x, k.y - a.y) < Math.hypot(b.x - a.x, b.y - a.y)) b = k;
+        }
+        const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy);
+        d.world.launch(a.id, (dx / L) * SIM.LAUNCH_SPEED, (dy / L) * SIM.LAUNCH_SPEED);
+
+        let barred = 0;
+        let open = 0;
+        for (let i = 0; i < 900 && open < 20; i++) {
+          d.step(SIM.DT);
+          const t = d.world.ducks.find((k) => !k.live && !k.matched && !k.popping);
+          if (!t) continue;
+          const got = d.slingshot.begin(t.x, t.y);
+          d.slingshot.cancel();
+          expect(got).toBe(d.readyForInput);
+          if (got) open++;
+          else barred++;
+        }
+        // …and the shot really did bar the board, and it really did reopen —
+        // an assertion that only ever compared `false` to `false` proves nothing
+        expect(barred, 'the shot never barred the board').toBeGreaterThan(30);
+        expect(open, 'the board never reopened').toBeGreaterThan(0);
+      });
+
+      it('is false while a pearl is still in the air', () => {
+        if (level.clams.length === 0) return;
+        const d = started(index);
+        d.movesLeft = 99;
+        d.world.hitClam(d.world.clams[0]!);
+        d.step(SIM.DT);
+        expect(d.readyForInput).toBe(false);
+      });
+    });
+
     it('the board OPENS full — every duck is there before the first step', () => {
       const d = started(index);
       const target = Math.max(level.targetDucks, 2);
@@ -416,12 +570,13 @@ for (let index = 0; index < LEVELS.length; index++) {
       expect(only(drain(d), 'duckSpawned')).toHaveLength(target);
     });
 
-    it('a top-up waits for the turn to resolve — never lands mid-chain', () => {
+    it('a top-up lands MID-CHAIN: the debt is owed by the pop, not by the turn', () => {
       const d = started(index);
       d.movesLeft = 99;
       // one duck left and it is mid-explosion: fuse lit, blinking, not yet gone.
-      // The field is under target, so a timer counted from the moment the count
-      // dropped would drop a duck in on top of the chain still playing out.
+      // The board is emphatically unsettled, and that no longer holds anything
+      // back (user-locked 2026-08-08) — the field is short, so it refills while
+      // the chain is still playing out.
       d.world.ducks.splice(1);
       const doomed = d.world.ducks[0]!;
       doomed.matched = true;
@@ -429,29 +584,18 @@ for (let index = 0; index < LEVELS.length; index++) {
 
       run(d, SIM.RESPAWN_DELAY + 0.3);
       expect(d.boardSettled()).toBe(false);
-      expect(d.world.ducks).toHaveLength(1);
-
-      // the chain finishes; the beat is measured from THERE, so nothing has
-      // appeared yet on the settling frame itself
-      doomed.matched = false;
-      run(d, SIM.RESPAWN_DELAY / 2);
-      expect(d.world.ducks).toHaveLength(1);
-
-      run(d, 6);
       expect(d.world.ducks.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('a top-up waits for a clam mid-cycle: the pearl lands before the duck', () => {
+    it('a top-up does not wait on a clam mid-cycle either', () => {
       if (level.clams.length === 0) return;
       const d = started(index);
       d.movesLeft = 99;
       d.world.ducks.length = 0; // the whole field is owed, so a top-up is due
       d.world.hitClam(d.world.clams[0]!);
-
+      // a pearl still climbing to the counter keeps boardSettled() false; the
+      // refill is measured from the debt, so it lands anyway
       run(d, SIM.RESPAWN_DELAY + 0.3);
-      expect(d.world.ducks).toHaveLength(0);
-
-      run(d, 6);
       expect(d.world.ducks.length).toBeGreaterThanOrEqual(2);
     });
 
@@ -497,7 +641,14 @@ for (let index = 0; index < LEVELS.length; index++) {
       // sits in depends on how the board is authored
       expect(d.goalsRemaining).toBe(1);
       expect(d.finaleArmed).toBe(true);
-      expect(d.slingshot.assist).toBeGreaterThanOrEqual(0.9);
+      if (LEVELS[index]!.pace) {
+        // the paced (rigged) board keeps the governed assist through the
+        // finale — the flourish's help-them-win crank would fight the
+        // near-miss brief. The event still fires: it is the view's drama beat.
+        expect(d.slingshot.assist).toBeLessThanOrEqual(0.7);
+      } else {
+        expect(d.slingshot.assist).toBeGreaterThanOrEqual(0.9);
+      }
       expect(only(drain(d), 'finaleArmed')).toHaveLength(1);
 
       // armed once and only once

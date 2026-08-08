@@ -24,13 +24,19 @@ export const SIM = {
   // removes the stall.) Trade-off, deliberate: `bump` re-attaches the lid for
   // most of its 0.30s run and strips it at the very end, so for ~0.2s the pearl
   // is rising over a shell that still looks shut.
-  /** pearl's flight from the shell to the HUD counter, timed from IMPACT */
+  /** each pearl's own flight from the shell to the HUD counter, timed from the
+   *  IMPACT that spilled it — two pearls from one shell can overlap in the air */
   PEARL_FLIGHT_TICKS: 42,        // 0.70s
-  /** impact → shell shut and armed again. Must outlast `bump` (0.30s) plus a
-   *  readable beat of `idle`, and the pearl is collected at 42 en route. */
+  /** impact → shell shut again. Must outlast `bump` (0.30s) plus a readable beat
+   *  of `idle`. It is NOT a lockout: a hit landing mid-cycle restarts the count
+   *  and pays out again, so this only decides how long the shell stays up. */
   CLAM_CYCLE_TICKS: 60,          // 1.00s
-  /** one physical collision opens a clam once (mirrors BARREL_HIT_COOLDOWN_TICKS) */
-  CLAM_HIT_COOLDOWN_TICKS: 12,
+  // There is deliberately NO hit cooldown on a clam (user-locked 2026-08-07),
+  // for the reason there is no minimum approach speed on a barrel: a window in
+  // ticks cannot tell a substep duplicate from a real second hit, and CLAM_HIT_
+  // COOLDOWN_TICKS 12 was the smaller half of a pair of gates that between them
+  // silenced 48% of every contact. The debounce that replaced it is per duck and
+  // scoped to the substep loop itself — Clam.hitThisStep, cleared every step.
 
   // The oyster IS the game's bumper ("GameEntityBumper renders as this oyster…
   // Adds pinball deflection juice", asset manifest), so it flings like the wall
@@ -67,6 +73,28 @@ export const SIM = {
   BUMPER_KEEP: 0.45,    // …plus this share of the incoming speed
   RESTITUTION_BODY: 0.96,   // sr — duck-duck impulse
   RESTITUTION_STATIC: 0.5,  // barrels: plain normal reflection at half energy
+  /**
+   * THE PLAYER'S SHOT LANDS AT FULL STRENGTH, WHATEVER THE ANGLE (user-locked
+   * 2026-08-07). The first duck each launched duck reaches leaves at exactly
+   * this speed, along the contact normal — the angle picks the DIRECTION and
+   * nothing else. See collideDuckPairs.
+   *
+   * MEASURED, not chosen. The plain equal-mass impulse scales with the normal
+   * component of the approach, so a shallow contact transfers almost nothing.
+   * Over the campaign bot (1045 player shots), the target's departure speed by
+   * impact obliquity — 1 is dead centre, 0 a pure graze:
+   *
+   *   graze   <0.35   n=42    p50   630
+   *   oblique .35-.7  n=83    p50  1416
+   *   solid   .7-.9   n=134   p50  2075
+   *   centre   >0.9   n=786   p50  2549
+   *
+   * A graze left with a quarter of a centre hit, and three quarters of all
+   * shots are already near-centre. So the constant is the centre-hit median:
+   * the shots that already felt right are unchanged, and the rest come up to
+   * meet them. Reproduce with the probe described in tests/sim/strike.test.ts.
+   */
+  SHOT_STRIKE_SPEED: 2550,
 
   GRAB_R: 80,           // pointer-to-duck pickup radius
   MIN_PULL: 40,         // below this, release is a whiff (no shot)
@@ -79,6 +107,14 @@ export const SIM = {
   // it lights a fuse: the duck keeps full physics, blinks white, and pops when
   // the fuse runs out. Each blast relights a fresh fuse on the ducks it catches,
   // so a chain costs one full fuse per generation.
+  //
+  // THE FUSE IS THE AD'S, NOT THE OFFICIAL'S (user-locked 2026-08-08). This is a
+  // playable ad, and the official 90-tick fuse buys nothing an ad can spend: it
+  // is dead time in which the player watches and cannot act, and it is paid once
+  // PER CHAIN GENERATION, so the deepest chain the sim can produce charged 7.5s
+  // of it. Cut to 36 with the blink band cut alongside — see MATCH_BLINK_TICKS,
+  // the two must move together or the flash stops reading. Nothing about the
+  // mechanic changed: same trigger, same blast, same order of beats.
   POP_SPEED: 126,       // min relative speed for a same-colour pair to match
   /**
    * Floor on the closing speed a duck-duck contact needs to report `duckBumped`.
@@ -97,27 +133,69 @@ export const SIM = {
    * 43.6). Reproduce with shots/bump-histogram.mjs.
    */
   BUMP_MIN_SPEED: 38.2, // == STOP_SPEED
-  BARREL_HIT_SPEED: 90, // min approach speed for a direct hit to damage a barrel
-  BARREL_HIT_COOLDOWN_TICKS: 12, // one physical collision counts once (0.2s)
+  // There is deliberately NO minimum approach speed for damaging a barrel
+  // (user-locked 2026-08-07). BARREL_HIT_SPEED 90 used to gate it and, because
+  // it tested the NORMAL component, it swallowed grazing hits at any speed as
+  // well as soft ones — see collideDuckBarrels. STOP_SPEED is the real floor:
+  // the step snaps anything slower to exactly zero, so a resting duck cannot
+  // nibble a crate.
+  BARREL_HIT_COOLDOWN_TICKS: 12, // one duck's collision counts once (0.2s)
   BLAST_R: 135,
-  MATCH_FUSE_TICKS: 90, // fixed steps from match to pop (60 ticks = 1 s)
-  MATCH_BLINK_TICKS: 9, // fixed steps per white/normal blink band
+  MATCH_FUSE_TICKS: 36, // fixed steps from match to pop, 0.60s (60 ticks = 1 s)
+  /**
+   * Fixed steps per white/normal blink band.
+   *
+   * TIED TO THE FUSE, NOT INDEPENDENT. What the player reads is not the band
+   * length, it is the COUNT of flashes — "that one is lit" needs enough
+   * alternations to register as a flash rather than a single tint. The official
+   * 9 against a 90 fuse gave 5; keeping 9 against the ad's 36 would leave 2,
+   * which reads as the duck briefly turning white and then exploding for no
+   * stated reason. 5 restores ~3.6 flashes in the shorter window, and the faster
+   * flicker is itself the urgency an ad wants. If MATCH_FUSE_TICKS ever moves
+   * again, move this with it and keep the quotient near 7.
+   */
+  MATCH_BLINK_TICKS: 5,
 
   // Blast shove (user-requested feel change over the official, which has no
   // impulse and pops on the fuse alone): every duck inside the radius, whatever
   // its colour, takes a SUBTLE radial kick and is DOOMED — it blinks from the
   // moment the blast catches it, drifts a little, and explodes ONLY once it is
   // fully idle: at rest AND static for the confirmation period below. Nothing
-  // else pops it — a victim never goes off mid-slide — so each generation reads
-  // slow and deliberate: pop → nudge → blink → settle → hold → pop.
+  // else pops it — a victim never goes off mid-slide — so every generation keeps
+  // the same order of beats: pop → nudge → blink → settle → hold → pop.
   BLAST_KNOCK: 150,      // px/s added at the blast centre…
   BLAST_KNOCK_EDGE: 70,  // …falling off linearly to this at the rim
-  // consecutive fully-static ticks before the pop. Tuned by hand: 45 (0.75s)
-  // read as a hang, 0 popped before the stop registered — 0.4s is the beat
-  // where the eye catches "it stopped" and then gets the bang.
-  BLAST_SETTLE_CONFIRM_TICKS: 24,
+  /**
+   * Consecutive fully-static ticks before the pop — the "it stopped… BANG" beat.
+   *
+   * Tuned by hand at the original pace: 45 (0.75s) read as a hang, 0 popped
+   * before the stop registered, 24 (0.40s) was the beat that landed. Cut to 10
+   * (0.17s) for the ad (user-locked 2026-08-08). This one has a hard floor and
+   * it is not comfort: it must stay above zero or the pop fires on the same
+   * frame the duck halts, and the eye never gets the stop it is the punctuation
+   * for. 10 ticks is still six frames of held stillness — enough to register the
+   * beat, not enough to feel like a wait.
+   *
+   * Must also stay below MATCH_FUSE_TICKS (asserted in blast.test.ts): a contact
+   * match pops on the LATER of its fuse and this hold, so a hold that outran the
+   * fuse would silently become the only thing timing a match.
+   */
+  BLAST_SETTLE_CONFIRM_TICKS: 10,
 
-  RESPAWN_DELAY: 0.6,
+  /**
+   * A duck pops → its replacement is due this many seconds later.
+   *
+   * Measured from the POP that owes it (user-locked 2026-08-08, see
+   * handleRespawns), so it is a per-duck debt and not a per-turn pause. It used
+   * to be measured from the board SETTLING, which meant a chain that took two
+   * seconds to unwind left the board short for all of it and only then started
+   * counting; the field is now back to full while the chain is still going off.
+   * Cut 0.6 → 0.2 for the ad earlier the same day.
+   *
+   * It is not zero on purpose — arriving on the very frame of the bang reads as
+   * the explosion having spawned the replacement.
+   */
+  RESPAWN_DELAY: 0.2,
   /**
    * The board's countdown, in fixed steps — 30 s at 60 Hz. This lived in the
    * view as a decorative number until now; the README's own rule ("A limit

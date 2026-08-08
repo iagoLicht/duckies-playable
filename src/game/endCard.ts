@@ -1,28 +1,33 @@
 import {
-  Application, Container, Graphics, NineSliceSprite, Sprite, Text, Texture,
+  Application, Container, Graphics, NineSliceSprite, RenderTexture, Sprite, Text, Texture,
   type TextStyleOptions,
 } from 'pixi.js';
+
+import { DESIGN_W } from './layout';
+import { coverScreen } from './stage';
 
 import panelUrl from '../assets/ui/popup-body-tall.webp';
 import ribbonUrl from '../assets/icons/ribbon-pink.webp';
 import buttonUrl from '../assets/ui/btn-green-large.webp';
 
-const DESIGN_W = 720;
-const DESIGN_H = 1280;
 /**
- * The pack's heavy condensed face (asap-semicondensed-black), registered by
- * the scene's font loader alongside CherryBomb. The card uses it throughout so
- * the two screens read as the same UI as the HUD bar above them.
+ * The pack's heavy condensed face (asap-semicondensed-black), registered by the
+ * scene's font loader. The card uses it throughout so the two screens read as
+ * the same UI as the HUD bar above them.
  *
- * Note this is NOT the role the pack's manifest assigns it — it calls Cherry
- * Bomb the face for "Headers/CTA/score" and this one the "number/counter font".
- * Overridden deliberately.
+ * Note this is NOT the role the pack's manifest assigns it — it calls this the
+ * "number/counter font" and gives "Headers/CTA/score" to CherryBombOne.
+ * Overridden deliberately, and that choice is now the whole story: this being
+ * the only face the ad renders is why CherryBombOne was dropped rather than
+ * shipped unused. Same constant, one place: HUD_NUM_FONT in scene.ts.
  */
 const CARD_FONT = 'AsapBlack';
 
-/** pack source dimensions — the staging step never resizes, so these are exact */
+/** pack source WIDTHS — the staging step never resizes, so these are exact.
+ *  Heights are not here: every sprite is scaled uniformly off its width, so a
+ *  height constant would only ever be read by a comment. popup-body-tall's 496
+ *  is quoted where it matters, in the slice note below. */
 const PANEL_SRC_W = 928;
-const PANEL_SRC_H = 496;
 const RIBBON_SRC_W = 1004;
 const BUTTON_SRC_W = 578;
 
@@ -62,8 +67,21 @@ const PANEL_TOP = 400;
 
 /** wider than the panel on purpose — the banner is meant to overhang it */
 const RIBBON_W = 640;
-const RIBBON_CY = PANEL_TOP + 24;
 const RIBBON_SCALE = RIBBON_W / RIBBON_SRC_W;
+/**
+ * Low enough to bury the panel's own top border, and that depth is a property
+ * of the texture rather than a taste call.
+ *
+ * A probe down popup-body-tall's centre column: rows 0..3 are the outer stroke,
+ * 4..113 the orange rim, 114..117 the inner stroke, and the wood fill starts at
+ * 118. Times panelScale (620/928) that is 78.8px of border below PANEL_TOP.
+ *
+ * The band's underside sits (211-169) * RIBBON_SCALE = 26.8px below RIBBON_CY
+ * (same source probe as TITLE_BAND_DY), so PANEL_TOP + 55 lands it at +81.8 —
+ * a few px into the wood, which leaves no hairline of rim to read as a second
+ * band under the pink. It used to be PANEL_TOP + 24, which left 28px showing.
+ */
+const RIBBON_CY = PANEL_TOP + 55;
 /**
  * The pink band is NOT centred in its own texture — the curled tails hang
  * below it and drag the image's centre down with them. A probe at the middle
@@ -96,6 +114,31 @@ const TITLE_DY = TITLE_BAND_DY + TITLE_INK_DY;
  */
 const TITLE_MAX_W = 468;
 
+/**
+ * The line under the banner, centred in the empty band between the two things
+ * that were already there.
+ *
+ * Both edges are derived, not eyeballed. The ribbon's pink band ends at source
+ * row 211 of 338 (the probe behind TITLE_BAND_DY), i.e. (211-169) * RIBBON_SCALE
+ * = 27px below RIBBON_CY, so its underside sits at PANEL_TOP + 82. The button
+ * art spans PANEL_TOP+191..+359. Halfway between 82 and 191 is 136, which is
+ * where this sits — the curled tails hang lower than the band but only at the
+ * far ends, so the centre column is clear the whole way down.
+ *
+ * This tracks RIBBON_CY: when the banner dropped to bury the panel's rim it ate
+ * 31px of the gap above, and leaving the line at its old 121 would have parked
+ * it hard against the ribbon with all the slack below.
+ */
+const SUBTITLE_CY = PANEL_TOP + 136;
+/**
+ * Secondary to the banner by every lever at once — half its size, a thinner
+ * outline, and sentence case — so it reads as the voice under the verdict
+ * rather than a second headline competing with it.
+ */
+const SUBTITLE_SIZE = 42;
+/** inside the panel's straight-sided well, with room to spare at 620 wide */
+const SUBTITLE_MAX_W = 520;
+
 const BUTTON_W = 430;
 const BUTTON_CY = PANEL_TOP + 275;
 /** the button art carries a bottom bevel, so the label rides above centre */
@@ -116,6 +159,8 @@ export interface EndCardTextures {
 
 export interface EndCardOpts {
   title: string;
+  /** the quieter line between the banner and the button */
+  subtitle: string;
   buttonLabel: string;
   /** a separate store link under the button — the win card only. On the lose
    *  card the button already IS the store, and a second path is noise. */
@@ -169,6 +214,13 @@ function bannerTitle(
   return t;
 }
 
+/** A card built ahead of time: attached (hidden) and fully rasterized, so
+ *  show() costs nothing on the frame the verdict lands. */
+export interface PreparedEndCard {
+  root: Container;
+  show: () => void;
+}
+
 /**
  * The end card. Whether it is terminal is the caller's business (see flow.ts):
  * this only knows what to say and what to call when tapped.
@@ -176,15 +228,30 @@ function bannerTitle(
  * The board stays visible through the scrim on purpose — the state you won or
  * lost IS the backdrop, and covering it would throw away the only thing on
  * screen that proves what just happened.
+ *
+ * Built HIDDEN and armed by show(). Rasterizing the card's Text objects was a
+ * measured one-frame spike (~370ms on a weak phone, on the exact frame the
+ * player's win or loss lands), so the scene prepares its cards during quiet
+ * moments and show() only flips visibility and starts the entrance.
  */
-export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOpts): Container {
+export function buildEndCard(
+  app: Application, parent: Container, tex: EndCardTextures, o: EndCardOpts,
+): PreparedEndCard {
   const root = new Container();
-  app.stage.addChild(root);
+  root.visible = false; // armed by show(); invisible also disables the scrim's tap-eating
+  parent.addChild(root);
 
   // ── scrim ────────────────────────────────────────────────────────────────
-  const scrim = new Graphics().rect(0, 0, DESIGN_W, DESIGN_H).fill({ color: 0x0a1b28, alpha: 0.66 });
+  // Drawn to the whole CANVAS, not to the 720x1280 board (coverScreen, and it
+  // redraws itself if the phone is rotated while the card is up). A scrim the
+  // size of the board dims the board and leaves the wall around it bright,
+  // which on any screen that is not 9:16 reads as a lit frame round a dark
+  // picture — and it is the letterbox margins, so it grows with the aspect.
+  const scrim = new Graphics();
+  const unbindScrim = coverScreen(scrim, 0x0a1b28, 0.66);
   scrim.alpha = 0;
-  // swallows taps meant for the board underneath: the card is modal
+  // swallows taps meant for the board underneath: the card is modal — and
+  // because the fill now reaches the corners of the glass, so does that
   scrim.eventMode = 'static';
   root.addChild(scrim);
 
@@ -230,6 +297,22 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   ribbonBox.alpha = 0;
   root.addChild(ribbonBox);
 
+  // ── subtitle ─────────────────────────────────────────────────────────────
+  // Reuses bannerTitle only for its shrink-to-fit; the ribbon offsets are not
+  // involved, since this is centred on flat panel rather than on a curved band.
+  const subtitle = bannerTitle(
+    o.subtitle,
+    {
+      fontFamily: CARD_FONT, fontSize: SUBTITLE_SIZE, fill: 0xffffff, align: 'center',
+      stroke: { color: 0x9c3a5e, width: 6, join: 'round' },
+    },
+    PANEL_CX, SUBTITLE_CY, SUBTITLE_MAX_W,
+  );
+  const subtitleBox = new Container();
+  subtitleBox.addChild(subtitle);
+  subtitleBox.alpha = 0;
+  root.addChild(subtitleBox);
+
   // ── button ───────────────────────────────────────────────────────────────
   const button = new Sprite(tex.button);
   button.anchor.set(0.5);
@@ -256,7 +339,7 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
   let storeBox: Container | null = null;
   if (o.storeLink) {
     const link = new Text({
-      text: 'Get Duckies Pop — free',
+      text: 'Get Duckies Pop free',
       style: { fontFamily: CARD_FONT, fontSize: 32, fill: 0xffffff, align: 'center' },
     });
     link.anchor.set(0.5);
@@ -288,6 +371,10 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
     ribbonBox.alpha = quadOut(clamp01((t - SCRIM_FADE - 0.1) / 0.3));
 
     const b = clamp01((t - SCRIM_FADE - PANEL_RISE) / BUTTON_FADE);
+    // on the button's curve, not the ribbon's: the ribbon fades in while the
+    // panel is still scaling up, and a line that belongs ON the panel must not
+    // appear over a panel that has not finished arriving
+    subtitleBox.alpha = b;
     buttonBox.alpha = b;
     if (storeBox) storeBox.alpha = b;
 
@@ -298,10 +385,49 @@ export function showEndCard(app: Application, tex: EndCardTextures, o: EndCardOp
       if (storeBox) storeBox.eventMode = 'static';
     }
   };
-  app.ticker.add(anim);
+
+  // Rasterize NOW, not on the show frame. Pixi paints a Text's canvas on its
+  // first RENDER, so a hidden card carries the whole spike to the verdict frame
+  // regardless of when it was built — one throwaway render forces every canvas
+  // paint and GPU upload here instead (measured: the card's Texts were a ~300ms
+  // frame on a weak phone; textures persist, so show() re-uses them all).
+  const prime = RenderTexture.create({ width: 8, height: 8 });
+  root.visible = true;
+  app.renderer.render({ container: root, target: prime });
+  root.visible = false;
+  prime.destroy(true);
+
+  let shown = false;
+  const show = (): void => {
+    if (shown || root.destroyed) return;
+    shown = true;
+    root.visible = true;
+    app.ticker.add(anim);
+  };
+
+  // A card can be pulled down before it has finished arriving — the dev level
+  // picker swaps the board out from under it — and both of the things it left
+  // running would outlive it: `anim` writing alpha into a destroyed container
+  // every frame, and the scrim's layout subscription holding that container
+  // alive for the rest of the session. (Removing a never-added anim is a no-op,
+  // so this is safe for a card destroyed while still prepared.)
+  root.once('destroyed', () => {
+    app.ticker.remove(anim);
+    unbindScrim();
+  });
 
   buttonBox.on('pointertap', o.onButton);
   storeBox?.on('pointertap', o.onStore);
 
-  return root;
+  return { root, show };
+}
+
+/** Build and raise a card in one go — the path for callers with no quiet
+ *  moment to prepare in (the dev `?card=` hook). */
+export function showEndCard(
+  app: Application, parent: Container, tex: EndCardTextures, o: EndCardOpts,
+): Container {
+  const card = buildEndCard(app, parent, tex, o);
+  card.show();
+  return card.root;
 }

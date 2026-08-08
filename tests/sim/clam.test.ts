@@ -9,11 +9,13 @@ import type { SimEvent } from '../../src/sim/types';
  * The clam (the pack's oyster rig) is a repeatable PEARL DISPENSER. Rules:
  *   1. it is ALWAYS solid — shut, open or spent it bounces ducks, because the
  *      rig is the game's bumper, and that deflection is level geometry;
- *   2. ANY duck CONTACT with an armed shell starts ONE cycle: open -> spill one
- *      pearl -> pearl reaches the HUD -> shell shuts and re-arms. Direction and
- *      strength do not gate the payout: if a duck reached it, it pays. Contact
- *      is the ONLY trigger - a blast does not reach it, however close;
- *   3. exactly one pearl per cycle, however many things hit it meanwhile;
+ *   2. ANY duck CONTACT with an armed shell runs the routine: open -> spill a
+ *      pearl -> pearl reaches the HUD -> shell shuts. Direction and strength do
+ *      not gate the payout: if a duck reached it, it pays. A POP within BLAST_R
+ *      runs the same routine, on the same terms as a crate taking the blast;
+ *   3. EVERY contact, including one landing mid-cycle, which restarts the shell
+ *      and spills a pearl of its own. The only thing counted once is a single
+ *      physical collision seen twice across the adaptive substeps;
  *   4. once the level's quota is met the Director spends every clam: still
  *      solid, still visible, permanently inert.
  *
@@ -68,7 +70,7 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(Math.hypot(d.x - c.x, d.y - c.y)).toBeGreaterThanOrEqual(TOUCH - 1e-6);
   });
 
-  it('a fast duck opens it exactly once, spilling one pearl', () => {
+  it('a fast duck that rebounds and comes back is paid for BOTH contacts', () => {
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
     const d = w.spawnDuck('red', LANE_X, CLAM.y);
@@ -76,19 +78,17 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     w.events.length = 0;
 
     // the shot hits, rebounds off the far wall and comes back for a second and
-    // third contact — all inside one cycle, so still one open and one pearl
+    // third contact — all inside ONE cycle, and every one of them pays
     steps(w, SIM.CLAM_CYCLE_TICKS - 1);
 
     expect(c.open).toBe(true);
     const opened = only(w.events, 'clamOpened');
-    expect(opened).toHaveLength(1);
+    expect(opened.length).toBeGreaterThan(1);
     expect(opened[0]).toEqual({ type: 'clamOpened', id: c.id, x: c.x, y: c.y });
-    expect(only(w.events, 'pearlReleased')).toEqual([
-      { type: 'pearlReleased', id: c.id, x: c.x, y: c.y },
-    ]);
-    expect(only(w.events, 'pearlCollected')).toEqual([
-      { type: 'pearlCollected', id: c.id },
-    ]);
+    // one pearl per opening, each with its own id so the view can tell them apart
+    const spilled = only(w.events, 'pearlReleased');
+    expect(spilled).toHaveLength(opened.length);
+    expect(new Set(spilled.map((e) => (e as { pearl: number }).pearl)).size).toBe(spilled.length);
   });
 
   it('a GLANCING hit spills its pearl — direction does not gate the payout', () => {
@@ -111,23 +111,36 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(only(w.events, 'pearlReleased')).toHaveLength(1);
   });
 
-  it('a blast inside BLAST_R does NOT open it — proximity is not contact', () => {
-    // The shell used to open here, jolting and paying out with nothing touching
-    // it, from as far as BLAST_R away. It is a contact bumper, not a struck
-    // goal: only a duck actually reaching it counts.
+  it('a blast inside BLAST_R opens it and spills one pearl', () => {
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
-    // stood clear of contact so the pop cannot double as a touch
+    // stood clear of contact, so anything that happens is the blast and not a touch
     const d = w.spawnDuck('red', CLAM.x, CLAM.y + SIM.BLAST_R - 5);
     expect(Math.hypot(d.x - c.x, d.y - c.y)).toBeGreaterThan(SIM.DUCK_R + SIM.CLAM_R);
     w.events.length = 0;
     w.popDuck(d); // pops where it stands and detonates
 
-    expect(c.open).toBe(false);
-    expect(only(w.events, 'clamOpened')).toHaveLength(0);
+    expect(c.open).toBe(true);
+    expect(only(w.events, 'clamOpened')).toHaveLength(1);
+    // exactly one, the same as a duck landing on it — not one per substep
+    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
+  });
+
+  it('one detonation pays each caught shell exactly once', () => {
+    const w = new World(1);
+    const a = w.spawnClam(CLAM.x - 120, CLAM.y);
+    const b = w.spawnClam(CLAM.x + 120, CLAM.y);
+    const d = w.spawnDuck('red', CLAM.x, CLAM.y);
+    w.events.length = 0;
+    w.popDuck(d);
+
+    expect(a.open).toBe(true);
+    expect(b.open).toBe(true);
+    // two shells caught, two pearls — and the fixed steps that follow add none
+    expect(only(w.events, 'pearlReleased')).toHaveLength(2);
+    w.events.length = 0;
+    for (let i = 0; i < 30; i++) w.step(SIM.DT);
     expect(only(w.events, 'pearlReleased')).toHaveLength(0);
-    // and nothing moved: no reaction at all, not merely no pearl
-    expect(only(w.events, 'bumperHit')).toHaveLength(0);
   });
 
   it('a blast outside BLAST_R leaves it shut', () => {
@@ -141,12 +154,17 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(only(w.events, 'clamOpened')).toHaveLength(0);
   });
 
-  it('no blast distance opens a shell — on the rim, inside it, or halfway in', () => {
-    // This used to assert the blast's reach against a clam: on the rim opened,
-    // a pixel past did not. There is no such reach any more, so the guard now
-    // walks INWARDS from the rim and expects nothing at every step. The nearest
-    // sample is still clear of contact, so any opening here is proximity.
-    for (const gap of [SIM.BLAST_R, SIM.BLAST_R - 1, 120, SIM.DUCK_R + SIM.CLAM_R + 2]) {
+  it('the blast reach against a shell is BLAST_R exactly', () => {
+    // walks out from contact to just past the rim; every sample is clear of
+    // touching, so anything that opens here opened on the blast
+    const cases: Array<[number, boolean]> = [
+      [SIM.DUCK_R + SIM.CLAM_R + 2, true],
+      [120, true],
+      [SIM.BLAST_R - 1, true],
+      [SIM.BLAST_R, true],
+      [SIM.BLAST_R + 1, false],
+    ];
+    for (const [gap, opens] of cases) {
       const w = new World(1);
       const c = w.spawnClam(CLAM.x, CLAM.y);
       const d = w.spawnDuck('red', CLAM.x, CLAM.y + gap);
@@ -154,8 +172,8 @@ describe('clam — a solid bumper that dispenses pearls', () => {
         .toBeGreaterThan(SIM.DUCK_R + SIM.CLAM_R);
       w.events.length = 0;
       w.popDuck(d);
-      expect(c.open, `gap ${gap}`).toBe(false);
-      expect(only(w.events, 'bumperHit'), `gap ${gap}`).toHaveLength(0);
+      expect(c.open, `gap ${gap}`).toBe(opens);
+      expect(only(w.events, 'pearlReleased'), `gap ${gap}`).toHaveLength(opens ? 1 : 0);
     }
   });
 
@@ -170,7 +188,7 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     // no stepping at all — both are already out, in order, before any tick runs
     expect(w.events).toEqual([
       { type: 'clamOpened', id: c.id, x: c.x, y: c.y },
-      { type: 'pearlReleased', id: c.id, x: c.x, y: c.y },
+      { type: 'pearlReleased', id: c.id, pearl: w.pearls[0]!.id, x: c.x, y: c.y },
     ]);
   });
 
@@ -283,37 +301,74 @@ describe('clam — a solid bumper that dispenses pearls', () => {
     expect(only(w.events, 'pearlCollected')).toHaveLength(1);
   });
 
-  it('spills exactly ONE pearl however many things hit it in one cycle', () => {
+  it('each pearl flies on its OWN clock, not the shell\'s cycle', () => {
+    // The bookkeeping half of "every hit pays". The pearl used to be collected
+    // at cycleTicks == PEARL_FLIGHT_TICKS, so a second hit — which restarts the
+    // cycle — would have stranded the first pearl: the view holds each one just
+    // short of the counter until the sim says it landed, so a lost arrival is a
+    // pearl hanging in the air for ever and a count that never drops.
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
-    // cleared BEFORE the opening hit: the spill is now part of that same impact,
-    // so clearing afterwards would throw away the very release being counted
-    w.events.length = 0;
+    const GAP = 20; // well inside the 60-tick cycle
+    w.hitClam(c);
+    steps(w, GAP);
+    w.hitClam(c); // restarts the shell, spills a second pearl
+    expect(w.pearls).toHaveLength(2);
 
-    w.hitClam(c);                                        // the one that lands
-    w.hitClam(c);                                        // direct re-trigger
-    w.popDuck(w.spawnDuck('green', CLAM.x, CLAM.y + 60)); // blast on top of it
-    const d = w.spawnDuck('red', LANE_X, CLAM.y);
-    w.launch(d.id, SIM.LAUNCH_SPEED, 0);                 // and a full-speed slam
-    steps(w, SIM.CLAM_CYCLE_TICKS - 1);
-
-    expect(only(w.events, 'clamOpened')).toHaveLength(1);
-    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
-    expect(only(w.events, 'pearlCollected')).toHaveLength(1);
+    // `t` counts fixed steps since the FIRST hit, so the second pearl left at GAP
+    const landed: number[] = [];
+    for (let t = GAP + 1; t <= COLLECT_AT + GAP + 5; t++) {
+      w.events.length = 0;
+      steps(w, 1);
+      if (only(w.events, 'pearlCollected').length > 0) landed.push(t);
+    }
+    // each lands COLLECT_AT ticks after ITS OWN release, so GAP apart
+    expect(landed).toEqual([COLLECT_AT, COLLECT_AT + GAP]);
+    expect(w.pearls).toHaveLength(0);
   });
 
   it('one physical collision spends one pearl, across every substep', () => {
-    // adaptive substepping runs the clam collision up to 16x per fixed step, and
-    // contact jitter can re-approach — without the cooldown a single slam could
-    // open the shell, have it shut, and open it again off the same contact
+    // adaptive substepping runs the clam collision up to 16x per fixed step, so
+    // one slam can register as an approach twice inside a step. That — and only
+    // that — is what the debounce is for, so the invariant is per STEP: however
+    // many times a duck rebounds over the cycle, no single step ever pays twice.
     const w = new World(1);
     const c = w.spawnClam(CLAM.x, CLAM.y);
     const d = w.spawnDuck('red', LANE_X, CLAM.y);
     w.launch(d.id, SIM.LAUNCH_SPEED, 0);
+
+    let total = 0;
+    for (let t = 0; t < SIM.CLAM_CYCLE_TICKS * 3; t++) {
+      w.events.length = 0;
+      steps(w, 1);
+      const opened = only(w.events, 'clamOpened').length;
+      expect(opened, `step ${t}`).toBeLessThanOrEqual(1);
+      total += opened;
+    }
+    expect(total).toBeGreaterThan(1); // it really did come back for more
+  });
+
+  it('a touch mid-cycle plays the routine AGAIN — the shell is never busy', () => {
+    // The reported bug, measured: over 10 levels x 15 bot seeds, 48.2% of all
+    // 5245 physical duck->shell contacts produced no routine at all, and 2523 of
+    // those 2526 silent contacts were refused by this one gate — the shell was
+    // still inside the 60-tick cycle a previous hit started. Half were a
+    // DIFFERENT duck (1280 of 2523). The duck was flung and the sound played;
+    // the mouth never opened and no pearl came out.
+    const w = new World(1);
+    const c = w.spawnClam(CLAM.x, CLAM.y);
+    w.hitClam(c);          // a cycle is already running…
+    steps(w, 10);          // …and ten ticks into it, well short of the 60
+    expect(c.open).toBe(true);
+    // the softest touch there is: parked just outside contact at 100 px/s
+    const d = w.spawnDuck('red', CLAM.x - TOUCH - 8, CLAM.y);
+    d.vx = 100;
     w.events.length = 0;
 
-    steps(w, SIM.CLAM_CYCLE_TICKS - 1);
+    expect(stepUntil(w, 'bumperHit', 30)).toBeGreaterThanOrEqual(0);
+
     expect(only(w.events, 'clamOpened')).toHaveLength(1);
+    expect(only(w.events, 'pearlReleased')).toHaveLength(1);
   });
 
   it('a spent clam stops dispensing but stays solid', () => {

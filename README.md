@@ -5,8 +5,8 @@ a top-down bathtub where you sling ducks into each other, match colours to set
 off chain explosions, crack clams for pearls, and smash crates — on a move
 budget, across a ten-level campaign.
 
-Ships as **one self-contained HTML file** (currently 1.13 MB against a 5 MB cap)
-with every asset inlined — art, fonts and the sfx clips alike.
+Ships as **one self-contained HTML file** (currently 1.16 MB against a 5 MB cap)
+with every asset inlined — art, the one font and the sfx clips alike.
 
 ## Quick start
 
@@ -21,11 +21,15 @@ is compiled out of the build, so the shipped ad always opens on level 1.
 | command | what it does |
 | --- | --- |
 | `npm run dev` | Vite dev server with hot reload |
-| `npm run build` | typecheck → vite build → inline+gzip into `dist/duckies-pop-playable.html`, size-gated |
-| `npm test` | typecheck (src + tests) → vitest (~50 s, includes a per-level solvability gate) |
+| `npm run build` | typecheck → vite build → inline+gzip into `dist/duckies-pop-playable.html`, size-gated. `DP_OUT_NAME=duckies_timer_lose_rigged` renames the artifact for a campaign variant |
+| `npm test` | typecheck (src + tests) → vitest (~10 s, includes the solvability and rigged-ending gates) |
 | `npm run tune` | measures how many shots each level actually needs — see *Balancing* |
+| `npm run calibrate` | plays a board under the real clock+budget at two skill levels — the rigged beat's tuning instrument |
 | `npm run assets` | re-stages art from the asset pack into `src/assets` |
 | `npm run shot` | screenshots a built file and fails on console errors |
+| `npm run responsive` | measures the fit, the HUD and the tint across the device matrix — see *Screen fitting* |
+| `npm run perf` | frame-time stats + CPU profile under CPU throttle, vs the dev server or a built file — see `tests/perf.mjs` |
+| `npm run flow` | plays the whole ad (L9 → card → L10) in a browser N times and reports each ending |
 
 ## Layout
 
@@ -48,8 +52,9 @@ frame and is otherwise a pure function of sim state.
 - **Aiming.** Drag a duck to set *direction only* — launch speed is fixed. A
   shot is legal **only if the aim guide reaches another duck**; anything else
   (wall, crate, clam, open water) shows a red X and the release is refused.
-- **Matching.** Two same-colour ducks colliding above `POP_SPEED` light a ~1.5 s
-  fuse, blink, then explode.
+- **Matching.** Two same-colour ducks colliding above `POP_SPEED` light a 0.60 s
+  fuse (`MATCH_FUSE_TICKS` 36), blink, then explode. The official game's fuse is
+  1.5 s; this is an ad, and the cut is deliberate — see the note on the constant.
 - **Chains.** An explosion knocks every duck within `BLAST_R`, dooms them
   regardless of colour, and each doomed duck explodes **once it has come fully
   to rest** — so chains walk across the board with a deliberate rhythm rather
@@ -61,9 +66,33 @@ frame and is otherwise a pure function of sim state.
   clam can serve a quota of any size. Once the quota is met every clam goes
   inert: still solid, still visible, but it no longer opens.
 - **Levels.** Cleared when every crate is destroyed and the pearl quota is met;
-  failed when the move budget is spent, goals remain, and the board is at rest
-  (so a shot in flight always finishes its chain first). Clear → next level;
-  fail → retry the same board.
+  failed when the move budget or the clock is spent, goals remain, and the board
+  is at rest (so a shot in flight always finishes its chain first). What happens
+  next is the ad's business, not the level's — see `src/game/flow.ts`: inside the
+  ad's two beats a clear walks on and a fail ends the run at the store, and only
+  an off-script board (the dev level picker) still retries.
+
+## Screen fitting
+
+Everything is authored in one **720x1280 design space** — the tub is traced at
+literal coordinates, the HUD bar sits at y 45, levels place ducks at authored
+points — and nothing reflows per device. `src/game/layout.ts` decides only where
+that box lands:
+
+- the canvas is always the **whole viewport**; the tiled bathroom wall is
+  stretched over the leftover, so there is no letterbox of dead colour;
+- the box is **contain-fitted and centred inside the safe area** (viewport minus
+  `env(safe-area-inset-*)`), not inside the raw viewport — which is what keeps
+  the HUD clear of a Dynamic Island, a notch or a home indicator by arithmetic
+  rather than by a guessed margin;
+- `layout.bleed` is the whole canvas expressed in design coordinates. **Every
+  full-screen overlay must be drawn to it** (`stage.coverScreen`): a tint drawn
+  to 0,0,720,1280 dims the board and leaves the wall around it bright.
+
+Insets cannot be emulated by any browser, so layout.ts reads
+`var(--dp-safe-top, env(safe-area-inset-top, 0px))` (and -right/-bottom/-left).
+Setting those variables on `<html>` before boot is how `npm run responsive`
+tests an island phone, and it exercises the same code a real device runs.
 
 ## Balancing
 
@@ -139,23 +168,40 @@ Several manifest-tagged "core" VFX textures are staged but not yet used (see
 - **Don't run the tuner and vitest concurrently** — the director suite's 5 s
   timeouts flake under the load.
 
+## The rigged second beat
+
+The ad's beat 2 ("The Golden Pearl") is designed to be **taken by the clock a
+hair short of the pearl quota** — the timer-lose build. A per-level `pace`
+block steers respawn *supply* (colour, placement, respawn timing, assist)
+toward finishing `targetLeft` short at 0:00; it never touches payouts, physics
+or the clock, is inert on untimed runs (the solvability gate, the tuner), and
+absent `pace` every other level is bit-identical, RNG call for RNG call.
+Numbers were chosen by `npm run calibrate` and are locked by
+`tests/sim/rigged.test.ts`; the reasoning lives in
+`docs/superpowers/specs/2026-08-08-timer-lose-rigged-build-design.md`. The
+export is `DP_OUT_NAME=duckies_timer_lose_rigged npm run build`.
+
 ## Open items
 
-- **No end card / CTA.** Clearing the last level just sits there. Biggest gap
-  for shipping as an actual ad.
 - **`merge-swirl` is staged but unused.** It is a 3.1 s anticipation riser for a
   merge mechanic this game does not have; `src/game/audio.ts` deliberately does
   not import it, so it costs the build nothing. The other 11 clips are wired.
 - **No lose sting.** The event map lists `LoseTitle_Enter` at priority `nice` and
   no fail clip was extracted from the bank, so "out of moves" is silent by
   choice — see the note on `levelFailed` in `scene.ts`.
-- **`ui-click` has no button to sit on yet.** Its only trigger is the refused-aim
-  blip; the CTA and mute chips that it is actually for are a later change. The
-  mute itself exists (`scene.audio.setMuted`) but nothing in the HUD calls it.
-- **Staged but unwired VFX** (`dome`, `ptx-stars`, `ssa-explosion`, `curve`,
+- **No mute control.** The mute itself exists (`scene.audio.setMuted`) but
+  nothing in the HUD calls it. `ui-click` is wired to the refused-aim blip and
+  to both end-card buttons.
+- **Staged but unwired VFX** (`dome`, `ssa-explosion`, `curve`,
   `trail-noise-short`) — intended for the win celebration and shot trails. They
-  cost nothing in the build (Vite only inlines what is imported).
-- **Failing is silent** — the board retries after 1.4 s with no "out of moves" UI.
+  cost nothing in the build (Vite only inlines what is imported). `ptx-stars` is
+  no longer on this list: it is the pop debris, and `dome` left it — the
+  asset-audit A/B rejected `dome` for the splash ring. See `OFFICIAL_*` in
+  `scene.ts`.
+- **Failing is terminal on-script** — a fail on either scripted beat raises the
+  lose card and the run ends at the store; `outcomeFor` never restarts a
+  scripted board. Off-script boards (the dev picker) retry after
+  `LEVEL_ADVANCE_DELAY` (1.8 s) with no card.
 - **`golden` on a barrel is cosmetic only** — the finale arms from "one goal
   remaining", so the flag now just picks the gold skin.
 - **Level schema gaps**: no per-level respawn colours, one spawn region per

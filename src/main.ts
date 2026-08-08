@@ -4,20 +4,16 @@ import { Application, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
 // pipes — a dynamic import after init leaves renderPipes['spine'] undefined in
 // dev (the single-file build masked this by evaluating everything up front)
 import { GameScene } from './game/scene';
-import { FIRST_BEAT } from './game/flow';
+import { AD_SCRIPT, FIRST_BEAT, outcomeFor } from './game/flow';
+import { DESIGN_H, DESIGN_W, onLayout, watchViewport } from './game/layout';
+import { buildStage } from './game/stage';
 
 import wallTileUrl from './assets/theme/bath-wall-tile.webp';
 import poolTileUrl from './assets/theme/bath-pool-blue.webp';
 import tipSideUrl from './assets/entities/wall-bouncers/BouncyWall-small-tip-side-outlined.webp';
 
-export const DESIGN_W = 720;
-export const DESIGN_H = 1280;
-
-function fitCanvas(app: Application): void {
-  const scale = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H);
-  app.canvas.style.width = `${DESIGN_W * scale}px`;
-  app.canvas.style.height = `${DESIGN_H * scale}px`;
-}
+// the design box's dimensions moved to game/layout.ts, which is also where the
+// decision about where to PUT it now lives
 
 async function boot(): Promise<void> {
   const app = new Application();
@@ -32,11 +28,14 @@ async function boot(): Promise<void> {
     roundPixels: true,
   });
   app.ticker.maxFPS = 60;
-  document.getElementById('game')!.appendChild(app.canvas);
-  fitCanvas(app);
-  window.addEventListener('resize', () => fitCanvas(app));
-  // visualViewport is the listener that actually fires on mobile URL-bar collapse
-  window.visualViewport?.addEventListener('resize', () => fitCanvas(app));
+  const host = document.getElementById('game')!;
+  host.appendChild(app.canvas);
+  // the canvas is the viewport from here on; the board is a scaled container
+  // inside it (see game/stage.ts) and layout.ts decides where it lands
+  const layers = buildStage(app);
+  // …and from here the container's box drives it: rotation, a resized ad slot,
+  // iOS's URL bar sliding away, a window dragged to a second monitor
+  watchViewport(host);
 
   // pink mosaic backdrop — a clean grout-aligned patch of the original
   // in-game-bg tiled full-screen, so no cropped bathroom props (plant, sink,
@@ -51,7 +50,21 @@ async function boot(): Promise<void> {
     height: DESIGN_H,
   });
   bg.tileScale.set(1280 / 1050);
-  app.stage.addChild(bg);
+  layers.backdrop.addChild(bg);
+  // THE WALL IS THE LETTERBOX. Whatever the screen's aspect, the tiles run to
+  // its corners — the old build left the leftover as flat page-background pink,
+  // which on a 19.5:9 phone was two dead bands above and below the tub.
+  //
+  // tilePosition cancels the sprite's own offset so the grout stays locked to
+  // the design grid: without it the pattern would slide under the tub every
+  // time the aspect changed, and the tub is drawn to sit on a particular row of
+  // tiles. See tests/sim/layout.test.ts for what `bleed` is.
+  onLayout((l) => {
+    bg.position.set(l.bleed.x, l.bleed.y);
+    bg.width = l.bleed.width;
+    bg.height = l.bleed.height;
+    bg.tilePosition.set(-l.bleed.x, -l.bleed.y);
+  });
 
   // ── bathtub ──────────────────────────────────────────────────────────────
   // The real game's tub silhouette: straight top edge set between "shoulder"
@@ -95,7 +108,7 @@ async function boot(): Promise<void> {
   water.tileScale.set(1.3); // tile pitch ≈ the example's 1.35 world units at our ppu
   const waterMask = traceTub(new Graphics(), 10).fill(0xffffff);
   water.mask = waterMask;
-  app.stage.addChild(water, waterMask);
+  layers.board.addChild(water, waterMask);
 
   // white ring hugging the inside wall — same hand-drawn sticker style as the
   // white base under every entity: NOT a perfect stroke. The boundary is sampled
@@ -209,7 +222,7 @@ async function boot(): Promise<void> {
   const triRight = new Sprite(tipTex);
   triRight.anchor.set(125 / 164, 0.5);
   triRight.position.set(DESIGN_W - (tub.l + 24), 950);
-  app.stage.addChild(ringShadow, triLeft, triRight, ringWhite);
+  layers.board.addChild(ringShadow, triLeft, triRight, ringWhite);
 
   // rim band: navy outline sandwich, near-white band, cool shadow along the
   // inner edge — colours matched to the gameplay reference
@@ -217,7 +230,7 @@ async function boot(): Promise<void> {
   traceTub(tubFrame, 0).stroke({ width: 30, color: 0x1a2430 });
   traceTub(tubFrame, 0).stroke({ width: 24, color: 0xa9c6cc });
   traceTub(tubFrame, -2).stroke({ width: 17, color: 0xe4eef1 });
-  app.stage.addChild(tubFrame);
+  layers.board.addChild(tubFrame);
 
   // ── the live game: sim-driven entities, input, fx ────────────────────────
   // ?level=N (1-based) jumps straight to a level — for playtesting and for the
@@ -230,7 +243,7 @@ async function boot(): Promise<void> {
     const wanted = Number(new URLSearchParams(location.search).get('level'));
     if (Number.isFinite(wanted) && wanted >= 1) startLevel = Math.floor(wanted) - 1;
   }
-  const scene = new GameScene(app, 20260802, startLevel);
+  const scene = new GameScene(app, layers, 20260802, startLevel);
   await scene.init();
 
   // deterministic readiness signal for the screenshot harness
@@ -256,15 +269,24 @@ async function boot(): Promise<void> {
       const { loadEndCardTextures, showEndCard } = await import('./game/endCard');
       const tex = await loadEndCardTextures();
       const log = (what: string) => (): void => console.log(`end card: ${what}`);
-      showEndCard(app, tex, which === 'win'
-        ? {
-            title: 'YOU WIN!', buttonLabel: 'NEXT LEVEL', storeLink: true,
-            onButton: log('next level'), onStore: log('store'),
-          }
-        : {
-            title: 'YOU LOST', buttonLabel: 'PLAY NOW', storeLink: false,
-            onButton: log('store'), onStore: log('store'),
-          });
+      // ASK THE SCRIPT, don't restate it. This used to hardcode its own copy and
+      // labels, so the preview was only accidentally the card — it still said
+      // "YOU WIN!" after the wording moved on. Both are read from the same
+      // outcomeFor the game calls: a win on beat one, and a fail on the last.
+      const o = outcomeFor(
+        which === 'win' ? FIRST_BEAT : AD_SCRIPT[AD_SCRIPT.length - 1]!.level,
+        which === 'win',
+      );
+      if (o.kind === 'card') {
+        showEndCard(app, layers.overlay, tex, {
+          title: o.title,
+          subtitle: o.subtitle,
+          buttonLabel: o.buttonLabel,
+          storeLink: o.storeLink,
+          onButton: log(o.buttonAction),
+          onStore: log('store'),
+        });
+      }
     }
   }
 
@@ -276,8 +298,12 @@ async function boot(): Promise<void> {
   if (import.meta.env.DEV) {
     const { LEVELS } = await import('./sim/levels');
     const picker = document.createElement('select');
+    // offset by the safe-area inset like everything else, or on an island phone
+    // the dropdown lands under the camera and cannot be tapped
     picker.style.cssText =
-      'position:fixed;top:8px;right:8px;z-index:10;font:700 14px system-ui;' +
+      'position:fixed;z-index:10;font:700 14px system-ui;' +
+      'top:calc(8px + var(--dp-safe-top, env(safe-area-inset-top, 0px)));' +
+      'right:calc(8px + var(--dp-safe-right, env(safe-area-inset-right, 0px)));' +
       'padding:6px 8px;border:2px solid #35304a;border-radius:10px;' +
       'background:rgba(255,255,255,.92);color:#35304a;opacity:.85';
     LEVELS.forEach((lv, i) => {

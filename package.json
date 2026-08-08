@@ -8,7 +8,11 @@
     "assets": "node scripts/prepare-assets.mjs",
     "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
     "tune": "node tests/tools/tune-levels.mjs",
-    "shot": "node tests/shot.mjs"
+    "calibrate": "node tests/tools/calibrate-clock.mjs",
+    "shot": "node tests/shot.mjs",
+    "responsive": "node tests/responsive.mjs",
+    "perf": "node tests/perf.mjs",
+    "flow": "node tests/rigged-flow.mjs"
   },
   "dependencies": {
     "@esotericsoftware/spine-pixi-v8": "~4.2.119",
